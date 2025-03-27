@@ -1016,27 +1016,27 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 {
 	int ret;
 
-	nccl_ofi_msgbuff_status_t stat;
+	nccl_ofi_msgbuff_t::status stat;
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)s_comm->base.base.ep;
-	nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_insert(s_comm->msgbuff, msg_seq_num,
-		rx_buff_req, NCCL_OFI_MSGBUFF_BUFF, &stat);
+	nccl_ofi_msgbuff_t::result mb_res = s_comm->msgbuff->insert(msg_seq_num,
+		rx_buff_req, nccl_ofi_msgbuff_t::elemtype::BUFF, &stat);
 
-	if (mb_res == NCCL_OFI_MSGBUFF_SUCCESS) {
+	if (mb_res == nccl_ofi_msgbuff_t::result::SUCCESS) {
 		/* Inserted! In this case sender has not yet called send() for this message, so
 		   return success and initiate RDMA write when sender calls send(). */
 		return decrease_rx_buff_cnt(ep, get_rx_buff_data(rx_buff_req)->rail);
 	}
 
-	if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_INVALID_IDX || stat != NCCL_OFI_MSGBUFF_INPROGRESS)) {
+	if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::INVALID_IDX || stat != nccl_ofi_msgbuff_t::status::INPROGRESS)) {
 		NCCL_OFI_WARN("Unexpected message insert result (%d) (ctrl recv)", (int)mb_res);
 		return -EINVAL;
 	}
 
 	// Already a req entry here
 	void *elem;
-	nccl_ofi_msgbuff_elemtype_t type;
-	mb_res = nccl_ofi_msgbuff_retrieve(s_comm->msgbuff, msg_seq_num, &elem, &type, &stat);
-	if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS || type != NCCL_OFI_MSGBUFF_REQ)) {
+	nccl_ofi_msgbuff_t::elemtype type;
+	mb_res = s_comm->msgbuff->retrieve(msg_seq_num, &elem, &type, &stat);
+	if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS || type != nccl_ofi_msgbuff_t::elemtype::REQ)) {
 		NCCL_OFI_WARN("Invalid message retrieval result for msg %hu", msg_seq_num);
 		return -EINVAL;
 	}
@@ -1152,30 +1152,30 @@ static inline int handle_eager_recv(nccl_net_ofi_rdma_recv_comm_t *r_comm,
 		return ret;
 	}
 
-	nccl_ofi_msgbuff_status_t stat;
-	nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_insert(r_comm->msgbuff, msg_seq_num,
-		rx_buff_req, NCCL_OFI_MSGBUFF_BUFF, &stat);
+	nccl_ofi_msgbuff_t::status stat;
+	nccl_ofi_msgbuff_t::result mb_res = r_comm->msgbuff->insert(msg_seq_num,
+		rx_buff_req, nccl_ofi_msgbuff_t::elemtype::BUFF, &stat);
 
-	if (mb_res == NCCL_OFI_MSGBUFF_SUCCESS) {
+	if (mb_res == nccl_ofi_msgbuff_t::result::SUCCESS) {
 		/* Inserted! In this case receiver has not yet called recv() for this message, so
 		   return success and initiate eager read when receiver calls recv(). */
 		return 0;
 	}
-	if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_INVALID_IDX)) {
+	if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::INVALID_IDX)) {
 		NCCL_OFI_WARN("Unexpected message insert result (%d) (eager recv)", (int)mb_res);
 		return -EINVAL;
 	}
 
-	if (OFI_UNLIKELY(stat != NCCL_OFI_MSGBUFF_INPROGRESS)) {
+	if (OFI_UNLIKELY(stat != nccl_ofi_msgbuff_t::status::INPROGRESS)) {
 		NCCL_OFI_WARN("Unexpected message status (%d) (ctrl recv)", (int)stat);
 		return -EINVAL;
 	}
 
 	// In this case, there is already a req entry here. Initiate eager copy.
 	void *elem;
-	nccl_ofi_msgbuff_elemtype_t type;
-	mb_res = nccl_ofi_msgbuff_retrieve(r_comm->msgbuff, msg_seq_num, &elem, &type, &stat);
-	if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS || type != NCCL_OFI_MSGBUFF_REQ)) {
+	nccl_ofi_msgbuff_t::elemtype type;
+	mb_res = r_comm->msgbuff->retrieve(msg_seq_num, &elem, &type, &stat);
+	if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS || type != nccl_ofi_msgbuff_t::elemtype::REQ)) {
 		NCCL_OFI_WARN("Invalid message retrieval result for msg %hu", msg_seq_num);
 		return -EINVAL;
 	}
@@ -1402,18 +1402,18 @@ static inline nccl_net_ofi_rdma_req_t *get_req_from_imm_data
 
 	uint16_t msg_seq_num = GET_SEQ_NUM_FROM_IMM(data);
 	void *elem;
-	nccl_ofi_msgbuff_elemtype_t type;
-	nccl_ofi_msgbuff_status_t stat;
+	nccl_ofi_msgbuff_t::elemtype type;
+	nccl_ofi_msgbuff_t::status stat;
 
-	nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_retrieve(r_comm->msgbuff,
-		msg_seq_num, &elem, &type, &stat);
-	if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS)) {
+	nccl_ofi_msgbuff_t::result mb_res = r_comm->msgbuff->retrieve(msg_seq_num, 
+		&elem, &type, &stat);
+	if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS)) {
 		/* Unexpected: we don't have a msgbuff entry corresponding to this message*/
 		NCCL_OFI_WARN("Unexpected status (%d) for message %hu", (int)stat, msg_seq_num);
 		return NULL;
 	}
 
-	if (OFI_UNLIKELY(type != NCCL_OFI_MSGBUFF_REQ)) {
+	if (OFI_UNLIKELY(type != nccl_ofi_msgbuff_t::elemtype::REQ)) {
 		NCCL_OFI_WARN("Unexpected type (%d) for message %hu", (int)type, msg_seq_num);
 		return NULL;
 	}
@@ -2719,9 +2719,9 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 				goto exit;
 			}
 
-			nccl_ofi_msgbuff_status_t stat;
-			nccl_ofi_msgbuff_result_t mb_res = nccl_ofi_msgbuff_complete(msgbuff, req->msg_seq_num, &stat);
-			if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS)) {
+			nccl_ofi_msgbuff_t::status stat;
+			nccl_ofi_msgbuff_t::result mb_res = msgbuff->complete(req->msg_seq_num, &stat);
+			if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS)) {
 				NCCL_OFI_WARN("Invalid result of msgbuff_complete for msg %hu", req->msg_seq_num);
 				ret = -EINVAL;
 				goto exit;
@@ -3402,36 +3402,35 @@ static inline int insert_rdma_recv_req_into_msgbuff(nccl_net_ofi_rdma_recv_comm_
 	bool eager, nccl_net_ofi_rdma_req_t **ret_req)
 {
 	nccl_net_ofi_rdma_req_t *req = *ret_req;
-	nccl_ofi_msgbuff_status_t msg_stat;
-	nccl_ofi_msgbuff_result_t mb_res;
+	nccl_ofi_msgbuff_t::status msg_stat;
+	nccl_ofi_msgbuff_t::result mb_res;
 
 	if (eager) {
 		/*
 		 * There is already a buffer entry in the message buffer, so
 		 * replace it with a request.
 		 */
-		mb_res = nccl_ofi_msgbuff_replace(r_comm->msgbuff,
-					req->msg_seq_num, req,
-					NCCL_OFI_MSGBUFF_REQ,
+		mb_res = r_comm->msgbuff->replace(req->msg_seq_num, req,
+					nccl_ofi_msgbuff_t::elemtype::REQ,
 					&msg_stat);
-		if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS)) {
-			NCCL_OFI_WARN("Unexpected result of nccl_ofi_msgbuff_replace for msg %hu",
+		if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS)) {
+			NCCL_OFI_WARN("Unexpected result of r_comm->msgbuff->replace for msg %hu",
 				      req->msg_seq_num);
 			return -EINVAL;
 		}
 	} else {
 		/* Try inserting the new request */
-		mb_res = nccl_ofi_msgbuff_insert(r_comm->msgbuff, req->msg_seq_num, req,
-						 NCCL_OFI_MSGBUFF_REQ, &msg_stat);
+		mb_res = r_comm->msgbuff->insert(req->msg_seq_num, req,
+						 nccl_ofi_msgbuff_t::elemtype::REQ, &msg_stat);
 
-		if (OFI_UNLIKELY((mb_res == NCCL_OFI_MSGBUFF_INVALID_IDX) &&
-				 (msg_stat == NCCL_OFI_MSGBUFF_INPROGRESS))) {
+		if (OFI_UNLIKELY((mb_res == nccl_ofi_msgbuff_t::result::INVALID_IDX) &&
+				 (msg_stat == nccl_ofi_msgbuff_t::status::INPROGRESS))) {
 			/* Unlikely: an eager message was received on another
 			   thread. Return NULL and let NCCL call recv again. */
 			req->free(req, false);
 			*ret_req = NULL;
-		} else if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS)) {
-			NCCL_OFI_WARN("Unexpected result of nccl_ofi_msgbuff_insert for msg %hu",
+		} else if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS)) {
+			NCCL_OFI_WARN("Unexpected result of r_comm->msgbuff->insert for msg %hu",
 				      req->msg_seq_num);
 			return -EINVAL;
 		}
@@ -3526,20 +3525,19 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	eager = false;
 	void *elem;
-	nccl_ofi_msgbuff_elemtype_t type;
-	nccl_ofi_msgbuff_status_t msg_stat;
-	nccl_ofi_msgbuff_result_t mb_res;
+	nccl_ofi_msgbuff_t::elemtype type;
+	nccl_ofi_msgbuff_t::status msg_stat;
+	nccl_ofi_msgbuff_t::result mb_res;
 
-	mb_res = nccl_ofi_msgbuff_retrieve(r_comm->msgbuff, msg_seq_num, &elem,
-					   &type, &msg_stat);
-	if (mb_res == NCCL_OFI_MSGBUFF_SUCCESS) {
+	mb_res = r_comm->msgbuff->retrieve(msg_seq_num, &elem, &type, &msg_stat);
+	if (mb_res == nccl_ofi_msgbuff_t::result::SUCCESS) {
 
-		if (type == NCCL_OFI_MSGBUFF_REQ) {
+		if (type == nccl_ofi_msgbuff_t::elemtype::REQ) {
 			/* Shouldn't happen: duplicate request */
 			NCCL_OFI_WARN("Duplicate request in message buffer for msg %hu", msg_seq_num);
 			ret = -EINVAL;
 			goto error;
-		} else if (OFI_LIKELY(type == NCCL_OFI_MSGBUFF_BUFF)) {
+		} else if (OFI_LIKELY(type == nccl_ofi_msgbuff_t::elemtype::BUFF)) {
 			/* This is an eager message */
 			eager = true;
 		} else {
@@ -3547,8 +3545,8 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 			ret = -EINVAL;
 			goto error;
 		}
-	} else if ((mb_res == NCCL_OFI_MSGBUFF_INVALID_IDX) &&
-		   (msg_stat == NCCL_OFI_MSGBUFF_NOTSTARTED)) {
+	} else if ((mb_res == nccl_ofi_msgbuff_t::result::INVALID_IDX) &&
+		   (msg_stat == nccl_ofi_msgbuff_t::status::NOTSTARTED)) {
 		/* Allocate a new req */
 	} else {
 		NCCL_OFI_WARN("Message %hu has invalid status.", msg_seq_num);
@@ -3794,12 +3792,12 @@ static int recv_comm_destroy(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 		NCCL_OFI_WARN("Call to nccl_ofi_freelist_fini failed: %d", ret);
 		return ret;
 	}
-
-	if (!nccl_ofi_msgbuff_destroy(r_comm->msgbuff)) {
-		NCCL_OFI_WARN("Failed to destroy msgbuff (r_comm)");
-		ret = -EINVAL;
-		return ret;
-	}
+	delete r_comm->msgbuff;
+	// if (!nccl_ofi_msgbuff_destroy(r_comm->msgbuff)) {
+	// 	NCCL_OFI_WARN("Failed to destroy msgbuff (r_comm)");
+	// 	ret = -EINVAL;
+	// 	return ret;
+	// }
 
 	/* Destroy domain */
 #if HAVE_NVTX_TRACING && NCCL_OFI_NVTX_TRACE_PER_COMM
@@ -3973,11 +3971,12 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 		return ret;
 	}
 
-	if (!nccl_ofi_msgbuff_destroy(s_comm->msgbuff)) {
-		NCCL_OFI_WARN("Failed to destroy msgbuff (s_comm)");
-		ret = -EINVAL;
-		return ret;
-	}
+	delete s_comm->msgbuff;
+	// if (!nccl_ofi_msgbuff_destroy(s_comm->msgbuff)) {
+	// 	NCCL_OFI_WARN("Failed to destroy msgbuff (s_comm)");
+	// 	ret = -EINVAL;
+	// 	return ret;
+	// }
 
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *) s_comm->base.base.ep;
 	nccl_net_ofi_rdma_device_t *device = rdma_endpoint_get_device(ep);
@@ -4649,7 +4648,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 	}
 
 	/* Allocate message buffer */
-	r_comm->msgbuff = nccl_ofi_msgbuff_init(NCCL_OFI_RDMA_MSGBUFF_SIZE, NCCL_OFI_RDMA_SEQ_BITS);
+	r_comm->msgbuff = new nccl_ofi_msgbuff_t(NCCL_OFI_RDMA_MSGBUFF_SIZE, NCCL_OFI_RDMA_SEQ_BITS);
 	if (!r_comm->msgbuff) {
 		NCCL_OFI_WARN("Failed to allocate and initialize message buffer");
 		free_rdma_recv_comm(r_comm);
@@ -4684,7 +4683,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 		if (r_comm->nccl_ofi_reqs_fl)
 			nccl_ofi_freelist_fini(r_comm->nccl_ofi_reqs_fl);
 		if (r_comm->msgbuff)
-			nccl_ofi_msgbuff_destroy(r_comm->msgbuff);
+			delete r_comm->msgbuff;
 		if (COMM_ID_INVALID != r_comm->local_comm_id) {
 			ret = nccl_ofi_idpool_free_id(device->comm_idpool, r_comm->local_comm_id);
 			if (ret != 0) {
@@ -5280,37 +5279,35 @@ static int insert_rdma_send_req_into_msgbuff(nccl_net_ofi_rdma_send_comm_t *s_co
 						      nccl_net_ofi_rdma_req_t **ret_req)
 {
 	nccl_net_ofi_rdma_req_t *req = *ret_req;
-	nccl_ofi_msgbuff_status_t msg_stat;
-	nccl_ofi_msgbuff_result_t mb_res;
+	nccl_ofi_msgbuff_t::status msg_stat;
+	nccl_ofi_msgbuff_t::result mb_res;
 
 	if (have_ctrl) {
 		/*
 		 * There is already a buffer entry in the message buffer,
 		 * so replace it with a request.
 		 */
-		mb_res = nccl_ofi_msgbuff_replace(s_comm->msgbuff,
-						  req->msg_seq_num, req,
-						  NCCL_OFI_MSGBUFF_REQ,
+		mb_res = s_comm->msgbuff->replace(req->msg_seq_num, req,
+						  nccl_ofi_msgbuff_t::elemtype::REQ,
 						  &msg_stat);
-		if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS)) {
-			NCCL_OFI_WARN("Unexpected result of nccl_ofi_msgbuff_replace for msg %hu",
+		if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS)) {
+			NCCL_OFI_WARN("Unexpected result of s_comm->msgbuff->replace for msg %hu",
 				      req->msg_seq_num);
 			return -EINVAL;
 		}
 	} else {
 		/* Try inserting the new request */
-		mb_res = nccl_ofi_msgbuff_insert(s_comm->msgbuff,
-						 req->msg_seq_num, req,
-						 NCCL_OFI_MSGBUFF_REQ,
+		mb_res = s_comm->msgbuff->insert(req->msg_seq_num, req,
+						 nccl_ofi_msgbuff_t::elemtype::REQ,
 						 &msg_stat);
-		if (OFI_UNLIKELY((mb_res == NCCL_OFI_MSGBUFF_INVALID_IDX) &&
-				 (msg_stat == NCCL_OFI_MSGBUFF_INPROGRESS))) {
+		if (OFI_UNLIKELY((mb_res == nccl_ofi_msgbuff_t::result::INVALID_IDX) &&
+				 (msg_stat == nccl_ofi_msgbuff_t::status::INPROGRESS))) {
 			/* Unlikely: a ctrl message was received on another
 			   thread. Return NULL and let NCCL call send again. */
 			req->free(req, false);
 			*ret_req = NULL;
-		} else if (OFI_UNLIKELY(mb_res != NCCL_OFI_MSGBUFF_SUCCESS)) {
-			NCCL_OFI_WARN("Unexpected result of nccl_ofi_msgbuff_insert for msg %hu",
+		} else if (OFI_UNLIKELY(mb_res != nccl_ofi_msgbuff_t::result::SUCCESS)) {
+			NCCL_OFI_WARN("Unexpected result of s_comm->msgbuff->insert for msg %hu",
 				      req->msg_seq_num);
 			return -EINVAL;
 		}
@@ -5832,34 +5829,33 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, int size, int t
 	msg_seq_num = s_comm->next_msg_seq_num;
 
 	void *elem;
-	nccl_ofi_msgbuff_elemtype_t type;
-	nccl_ofi_msgbuff_status_t msg_stat;
-	nccl_ofi_msgbuff_result_t mb_res;
+	nccl_ofi_msgbuff_t::elemtype type;
+	nccl_ofi_msgbuff_t::status msg_stat;
+	nccl_ofi_msgbuff_t::result mb_res;
 
 retry:
 	/* Retrive entry from message buffer for msg_seq_num index */
-	mb_res = nccl_ofi_msgbuff_retrieve(s_comm->msgbuff, msg_seq_num, &elem,
-					   &type, &msg_stat);
-	if (mb_res == NCCL_OFI_MSGBUFF_SUCCESS) {
-		if (OFI_LIKELY(type == NCCL_OFI_MSGBUFF_BUFF)) {
+	mb_res = s_comm->msgbuff->retrieve(msg_seq_num, &elem, &type, &msg_stat);
+	if (mb_res == nccl_ofi_msgbuff_t::result::SUCCESS) {
+		if (OFI_LIKELY(type == nccl_ofi_msgbuff_t::elemtype::BUFF)) {
 			/*
 			 * Received RDMA control message from receiver so
 			 * allocate request and initiate RDMA write
 			 */
 			have_ctrl = true;
-		} else if (type == NCCL_OFI_MSGBUFF_REQ) {
+		} else if (type == nccl_ofi_msgbuff_t::elemtype::REQ) {
 			/* Shouldn't happen: we already have a req in the message buffer */
 			NCCL_OFI_WARN("Duplicate request in message buffer for msg %hu", msg_seq_num);
 			ret = -EINVAL;
 			goto error;
 		} else {
 			NCCL_OFI_WARN("Unexpected type of buffer retrieved from message buffer: %d",
-				      type);
+				static_cast<int>((type)));
 			ret = -EINVAL;
 			goto error;
 		}
-	} else if ((mb_res == NCCL_OFI_MSGBUFF_INVALID_IDX) &&
-		   (msg_stat == NCCL_OFI_MSGBUFF_NOTSTARTED)) {
+	} else if ((mb_res == nccl_ofi_msgbuff_t::result::INVALID_IDX) &&
+		   (msg_stat == nccl_ofi_msgbuff_t::status::NOTSTARTED)) {
 		/*
 		 * We haven't encountered this message sequence number.
 		 * Allocate a request so that we are able to send RDMA write
@@ -5868,7 +5864,7 @@ retry:
 		have_ctrl = false;
 	} else {
 		NCCL_OFI_WARN("Message %hu has invalid status. res = %d and stat = %d",
-			      msg_seq_num, mb_res, msg_stat);
+			      msg_seq_num, static_cast<int>(mb_res), static_cast<int>(msg_stat));
 		ret = -EINVAL;
 		goto error;
 	}
@@ -6538,7 +6534,7 @@ static inline int create_send_comm(nccl_net_ofi_conn_handle_t *handle,
 				     (nccl_ofi_rdma_connection_info_t *)ret_s_comm->conn_msg->ptr);
 
 	/* Allocate message buffer */
-	ret_s_comm->msgbuff = nccl_ofi_msgbuff_init(NCCL_OFI_RDMA_MSGBUFF_SIZE, NCCL_OFI_RDMA_SEQ_BITS);
+	ret_s_comm->msgbuff = new nccl_ofi_msgbuff_t(NCCL_OFI_RDMA_MSGBUFF_SIZE, NCCL_OFI_RDMA_SEQ_BITS);
 	if (!ret_s_comm->msgbuff) {
 		NCCL_OFI_WARN("Failed to allocate and initialize message buffer");
 		ret = -ENOMEM;

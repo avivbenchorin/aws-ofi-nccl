@@ -13,237 +13,194 @@
 #include "nccl_ofi_log.h"
 #include "nccl_ofi_pthread.h"
 
-nccl_ofi_msgbuff_t *nccl_ofi_msgbuff_init(uint16_t max_inprogress, uint16_t bit_width)
+nccl_ofi_msgbuff_t::nccl_ofi_msgbuff_t(uint16_t max_inprogress_, uint16_t bit_width) :
+	max_inprogress(max_inprogress_),
+	field_size((uint16_t)(1 << bit_width)),
+	field_mask((uint16_t)(1 << bit_width) - 1),
+	msg_last_incomplete(0),
+	msg_next(0)
 {
-	int ret;
-	nccl_ofi_msgbuff_t *msgbuff = NULL;
-
+	buff = NULL;
 	if (max_inprogress == 0 || (uint16_t)(1 << bit_width) <= 2 * max_inprogress) {
 		NCCL_OFI_WARN("Wrong parameters for msgbuff_init max_inprogress %" PRIu16 " bit_width %" PRIu16 "",
 			      max_inprogress, bit_width);
-		goto error;
+		return;
 	}
 
-	msgbuff = (nccl_ofi_msgbuff_t *)malloc(sizeof(nccl_ofi_msgbuff_t));
-	if (!msgbuff) {
-		NCCL_OFI_WARN("Memory allocation (msgbuff) failed");
-		goto error;
-	}
-
-	msgbuff->buff =
-		(nccl_ofi_msgbuff_elem_t *)malloc(sizeof(nccl_ofi_msgbuff_elem_t) * max_inprogress);
-	if (!msgbuff->buff) {
+	buff = (elem *)malloc(sizeof(elem) * max_inprogress);
+	if (!buff) {
 		NCCL_OFI_WARN("Memory allocation (msgbuff->buff) failed");
-		goto error;
 	}
-
-	msgbuff->msg_last_incomplete = 0;
-	msgbuff->msg_next = 0;
-	msgbuff->field_size = (uint16_t)(1 << bit_width);
-	msgbuff->field_mask = (uint16_t)(1 << bit_width) - 1;
-	msgbuff->max_inprogress = max_inprogress;
-
-	ret = nccl_net_ofi_mutex_init(&msgbuff->lock, NULL);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Mutex initialization failed: %s", strerror(ret));
-		goto error;
-	}
-
-	return msgbuff;
-
-error:
-	if (msgbuff) {
-		if (msgbuff->buff) {
-			free(msgbuff->buff);
-		}
-		free(msgbuff);
-	}
-	return NULL;
 }
 
-static inline uint16_t distance(const nccl_ofi_msgbuff_t *msgbuff, const uint16_t front, const uint16_t back)
+nccl_ofi_msgbuff_t::~nccl_ofi_msgbuff_t()
 {
-	return (front < back ? msgbuff->field_size : 0) + front - back;
-}
-
-bool nccl_ofi_msgbuff_destroy(nccl_ofi_msgbuff_t *msgbuff)
-{
-	if (!msgbuff) {
-		NCCL_OFI_WARN("msgbuff is NULL");
-		return false;
-	}
-	if (!msgbuff->buff) {
+	if (!buff) {
 		NCCL_OFI_WARN("msgbuff->buff is NULL");
-		return false;
+		return;
 	}
-	free(msgbuff->buff);
-	nccl_net_ofi_mutex_destroy(&msgbuff->lock);
-	free(msgbuff);
-	return true;
+	free(buff);
+	buff = NULL;
 }
 
-static uint16_t nccl_ofi_msgbuff_num_inflight(const nccl_ofi_msgbuff_t *msgbuff) {
+uint16_t nccl_ofi_msgbuff_t::distance(const uint16_t front, const uint16_t back)
+{
+	return (front < back ? field_size : 0) + front - back;
+}
+
+uint16_t nccl_ofi_msgbuff_t::num_inflight() {
 	/**
 	 * Computes the "distance" between msg_last_incomplete and msg_next. This works
 	 * correctly even if msg_next is wrapped around and msg_last_incomplete has not.
 	 */
-	return distance(msgbuff, msgbuff->msg_next, msgbuff->msg_last_incomplete);
+	return distance(msg_next, msg_last_incomplete);
 }
 
-static inline nccl_ofi_msgbuff_elem_t *buff_idx(const nccl_ofi_msgbuff_t *msgbuff,
-                                                uint16_t idx)
+nccl_ofi_msgbuff_t::elem *nccl_ofi_msgbuff_t::buff_idx(uint16_t idx)
 {
-	return &msgbuff->buff[idx % msgbuff->max_inprogress];
+	return &buff[idx % max_inprogress];
 }
 
 /**
  * Given a msg buffer and an index, returns message status
  * @return
- *  NCCL_OFI_MSGBUFF_COMPLETED
- *  NCCL_OFI_MSGBUFF_INPROGRESS
- *  NCCL_OFI_MSGBUFF_NOTSTARTED
- *  NCCL_OFI_MSGBUFF_UNAVAILABLE
+ *  nccl_ofi_msgbuff_t::status::COMPLETED
+ *  nccl_ofi_msgbuff_t::status::INPROGRESS
+ *  nccl_ofi_msgbuff_t::status::NOTSTARTED
+ *  nccl_ofi_msgbuff_t::status::UNAVAILABLE
  */
-static nccl_ofi_msgbuff_status_t nccl_ofi_msgbuff_get_idx_status
-		(const nccl_ofi_msgbuff_t *msgbuff, uint16_t msg_index)
+nccl_ofi_msgbuff_t::status nccl_ofi_msgbuff_t::get_idx_status (uint16_t msg_index)
 {
 	/* Test for INPROGRESS: index is between msg_last_incomplete (inclusive) and msg_next
 	 * (exclusive) */
-	if (distance(msgbuff, msg_index, msgbuff->msg_last_incomplete) <
-	    distance(msgbuff, msgbuff->msg_next, msgbuff->msg_last_incomplete)) {
-		return buff_idx(msgbuff,msg_index)->stat;
+	if (distance(msg_index, msg_last_incomplete) <
+	    distance(msg_next, msg_last_incomplete)) {
+		return buff_idx(msg_index)->stat;
 	}
 
 	/* Test for COMPLETED: index is within max_inprogress below msg_last_incomplete, including
 	 * wraparound */
-	if (msg_index != msgbuff->msg_last_incomplete &&
-	    distance(msgbuff, msgbuff->msg_last_incomplete, msg_index) <= msgbuff->max_inprogress) {
-		return NCCL_OFI_MSGBUFF_COMPLETED;
+	if (msg_index != msg_last_incomplete &&
+	    distance(msg_last_incomplete, msg_index) <= max_inprogress) {
+		return status::COMPLETED;
 	}
 
 	/* Test for NOTSTARTED: index is >= msg_next and there is room in the buffer */
-	if (distance(msgbuff, msg_index, msgbuff->msg_next) <
-	    distance(msgbuff, msgbuff->max_inprogress, nccl_ofi_msgbuff_num_inflight(msgbuff))) {
-		return NCCL_OFI_MSGBUFF_NOTSTARTED;
+	if (distance(msg_index, msg_next) <
+	    distance(max_inprogress, num_inflight())) {
+		return status::NOTSTARTED;
 	}
 
 	/* If none of the above apply, then we do not have space to store this message */
-	return NCCL_OFI_MSGBUFF_UNAVAILABLE;
+	return status::UNAVAILABLE;
 }
 
-nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_insert(nccl_ofi_msgbuff_t *msgbuff,
-		uint16_t msg_index, void *elem, nccl_ofi_msgbuff_elemtype_t type,
-		nccl_ofi_msgbuff_status_t *msg_idx_status)
+nccl_ofi_msgbuff_t::result nccl_ofi_msgbuff_t::insert(uint16_t msg_index, 
+												   void *element,
+												   nccl_ofi_msgbuff_t::elemtype type,
+												   nccl_ofi_msgbuff_t::status *msg_idx_status)
 {
-	assert(msgbuff);
+	std::lock_guard<std::mutex> l(lock);
 
-	nccl_net_ofi_mutex_lock(&msgbuff->lock);
+	*msg_idx_status = get_idx_status(msg_index);
+	result ret = result::ERROR;
 
-	*msg_idx_status = nccl_ofi_msgbuff_get_idx_status(msgbuff, msg_index);
-	nccl_ofi_msgbuff_result_t ret = NCCL_OFI_MSGBUFF_ERROR;
-
-	if (*msg_idx_status == NCCL_OFI_MSGBUFF_NOTSTARTED) {
-		buff_idx(msgbuff, msg_index)->stat = NCCL_OFI_MSGBUFF_INPROGRESS;
-		buff_idx(msgbuff, msg_index)->elem = elem;
-		buff_idx(msgbuff, msg_index)->type = type;
+	if (*msg_idx_status == status::NOTSTARTED) {
+		buff_idx(msg_index)->stat = status::INPROGRESS;
+		buff_idx(msg_index)->elem = element;
+		buff_idx(msg_index)->type = type;
 		/* Update msg_next ptr */
-		while (distance(msgbuff, msg_index, msgbuff->msg_next) <= msgbuff->max_inprogress) {
-			if (msgbuff->msg_next != msg_index) {
-				buff_idx(msgbuff, msgbuff->msg_next)->stat = NCCL_OFI_MSGBUFF_NOTSTARTED;
-				buff_idx(msgbuff, msgbuff->msg_next)->elem = NULL;
+		while (distance(msg_index, msg_next) <= max_inprogress) {
+			if (msg_next != msg_index) {
+				buff_idx(msg_next)->stat = status::NOTSTARTED;
+				buff_idx(msg_next)->elem = NULL;
 			}
-			msgbuff->msg_next = (msgbuff->msg_next + 1) & msgbuff->field_mask;
+			msg_next = (msg_next + 1) & field_mask;
 		}
-		ret = NCCL_OFI_MSGBUFF_SUCCESS;
+		ret = result::SUCCESS;
 	} else {
-		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
+		ret = result::INVALID_IDX;
 	}
 
-	nccl_net_ofi_mutex_unlock(&msgbuff->lock);
 	return ret;
 }
 
-nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_replace(nccl_ofi_msgbuff_t *msgbuff,
-		uint16_t msg_index, void *elem, nccl_ofi_msgbuff_elemtype_t type,
-		nccl_ofi_msgbuff_status_t *msg_idx_status)
+nccl_ofi_msgbuff_t::result nccl_ofi_msgbuff_t::replace(uint16_t msg_index,
+													   void *element,
+													   nccl_ofi_msgbuff_t::elemtype type,
+													   nccl_ofi_msgbuff_t::status *msg_idx_status)
 {
-	assert(msgbuff);
+	std::lock_guard<std::mutex> l(lock);
 
-	nccl_net_ofi_mutex_lock(&msgbuff->lock);
+	*msg_idx_status = get_idx_status(msg_index);
+	result ret = result::ERROR;
 
-	*msg_idx_status = nccl_ofi_msgbuff_get_idx_status(msgbuff, msg_index);
-	nccl_ofi_msgbuff_result_t ret = NCCL_OFI_MSGBUFF_ERROR;
-
-	if (*msg_idx_status == NCCL_OFI_MSGBUFF_INPROGRESS) {
-		buff_idx(msgbuff, msg_index)->elem = elem;
-		buff_idx(msgbuff, msg_index)->type = type;
-		ret = NCCL_OFI_MSGBUFF_SUCCESS;
+	if (*msg_idx_status == status::INPROGRESS) {
+		buff_idx(msg_index)->elem = element;
+		buff_idx(msg_index)->type = type;
+		ret = result::SUCCESS;
 	} else {
-		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
+		ret = result::INVALID_IDX;
 	}
 
-	nccl_net_ofi_mutex_unlock(&msgbuff->lock);
 	return ret;
 }
 
-nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_retrieve(nccl_ofi_msgbuff_t *msgbuff,
-		uint16_t msg_index, void **elem, nccl_ofi_msgbuff_elemtype_t *type,
-		nccl_ofi_msgbuff_status_t *msg_idx_status)
+nccl_ofi_msgbuff_t::result nccl_ofi_msgbuff_t::retrieve(uint16_t msg_index,
+														void **element,
+														nccl_ofi_msgbuff_t::elemtype *type,
+														nccl_ofi_msgbuff_t::status *msg_idx_status)
 {
-	assert(msgbuff);
+	std::lock_guard<std::mutex> l(lock);
 
-	if (OFI_UNLIKELY(!elem)) {
+	if (OFI_UNLIKELY(!element)) {
 		NCCL_OFI_WARN("elem is NULL");
-		return NCCL_OFI_MSGBUFF_ERROR;
+		return result::ERROR;
 	}
-	nccl_net_ofi_mutex_lock(&msgbuff->lock);
 
-	*msg_idx_status = nccl_ofi_msgbuff_get_idx_status(msgbuff, msg_index);
-	nccl_ofi_msgbuff_result_t ret = NCCL_OFI_MSGBUFF_ERROR;
+	*msg_idx_status = get_idx_status(msg_index);
+	result ret = result::ERROR;
 
-	if (*msg_idx_status == NCCL_OFI_MSGBUFF_INPROGRESS) {
-		*elem = buff_idx(msgbuff, msg_index)->elem;
-		*type = buff_idx(msgbuff, msg_index)->type;
-		ret = NCCL_OFI_MSGBUFF_SUCCESS;
+	if (*msg_idx_status == status::INPROGRESS) {
+		*element = buff_idx(msg_index)->elem;
+		*type = buff_idx(msg_index)->type;
+		ret = result::SUCCESS;
 	} else  {
-		if (*msg_idx_status == NCCL_OFI_MSGBUFF_UNAVAILABLE) {
+		if (*msg_idx_status == status::UNAVAILABLE) {
 			// UNAVAILABLE really only applies to insert, so return NOTSTARTED here
-			*msg_idx_status = NCCL_OFI_MSGBUFF_NOTSTARTED;
+			*msg_idx_status = status::NOTSTARTED;
 		}
-		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
+		ret = result::INVALID_IDX;
 	}
 
-	nccl_net_ofi_mutex_unlock(&msgbuff->lock);
 	return ret;
 }
 
-nccl_ofi_msgbuff_result_t nccl_ofi_msgbuff_complete(nccl_ofi_msgbuff_t *msgbuff,
-		uint16_t msg_index, nccl_ofi_msgbuff_status_t *msg_idx_status)
+nccl_ofi_msgbuff_t::result nccl_ofi_msgbuff_t::complete(uint16_t msg_index,
+														nccl_ofi_msgbuff_t::status *msg_idx_status)
 {
-	assert(msgbuff);
+	std::lock_guard<std::mutex> l(lock);
 
-	nccl_net_ofi_mutex_lock(&msgbuff->lock);
+	*msg_idx_status = get_idx_status(msg_index);
+	result ret = result::ERROR;
 
-	*msg_idx_status = nccl_ofi_msgbuff_get_idx_status(msgbuff, msg_index);
-	nccl_ofi_msgbuff_result_t ret = NCCL_OFI_MSGBUFF_ERROR;
-
-	if (*msg_idx_status == NCCL_OFI_MSGBUFF_INPROGRESS) {
-		buff_idx(msgbuff, msg_index)->stat = NCCL_OFI_MSGBUFF_COMPLETED;
-		buff_idx(msgbuff, msg_index)->elem = NULL;
+	if (*msg_idx_status == status::INPROGRESS) {
+		buff_idx(msg_index)->stat = status::COMPLETED;
+		buff_idx(msg_index)->elem = NULL;
 		/* Move up tail msg_last_incomplete ptr */
-		while (msgbuff->msg_last_incomplete != msgbuff->msg_next &&
-				buff_idx(msgbuff, msgbuff->msg_last_incomplete)->stat == NCCL_OFI_MSGBUFF_COMPLETED)
+		while (msg_last_incomplete != msg_next &&
+				buff_idx(msg_last_incomplete)->stat == status::COMPLETED)
 		{
-			msgbuff->msg_last_incomplete = (msgbuff->msg_last_incomplete + 1) & msgbuff->field_mask;
+			msg_last_incomplete = (msg_last_incomplete + 1) & field_mask;
 		}
-		ret = NCCL_OFI_MSGBUFF_SUCCESS;
+		ret = result::SUCCESS;
 	} else {
-		if (*msg_idx_status == NCCL_OFI_MSGBUFF_UNAVAILABLE) {
+		if (*msg_idx_status == status::UNAVAILABLE) {
 			// UNAVAILABLE really only applies to insert, so return NOTSTARTED here
-			*msg_idx_status = NCCL_OFI_MSGBUFF_NOTSTARTED;
+			*msg_idx_status = status::NOTSTARTED;
 		}
-		ret = NCCL_OFI_MSGBUFF_INVALID_IDX;
+		ret = result::INVALID_IDX;
 	}
-	nccl_net_ofi_mutex_unlock(&msgbuff->lock);
+
 	return ret;
 }
