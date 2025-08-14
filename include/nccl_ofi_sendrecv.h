@@ -11,6 +11,7 @@
 #include "nccl_ofi.h"
 #include "nccl_ofi_freelist.h"
 #include "nccl_ofi_log.h"
+#include "nccl_ofi_ofiwrapper.h"
 
 /* This is the initial value of mr_key. At key deregisteration time,
  * it is used to validate if a key was generated and needed to be freed or not.
@@ -234,10 +235,10 @@ public:
 	uint64_t max_tag;
 
 	/* Endpoint handle to communicate to */
-	struct fid_ep *ofi_ep = nullptr;
+	FidEpPtr ofi_ep;
 
 	/* Address vector handle */
-	struct fid_av *av = nullptr;
+	FidAvPtr av;
 
 protected:
 	/**

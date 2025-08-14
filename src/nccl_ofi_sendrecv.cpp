@@ -812,7 +812,7 @@ static int sendrecv_comm_mr_base_reg(nccl_net_ofi_comm_t *base_comm,
 	key_pool = domain->mr_rkey_pool;
 	struct fid_domain *ofi_domain;
 	ofi_domain = ep->sendrecv_endpoint_get_ofi_domain();
-	ret = sendrecv_mr_base_register(ofi_domain, ep->ofi_ep, key_pool,
+	ret = sendrecv_mr_base_register(ofi_domain, ep->ofi_ep.get(), key_pool,
 					dev_id, ckey, type, &ret_handle);
 	if (OFI_UNLIKELY(ret_handle == NULL || ret != 0)) {
 		ret_handle = NULL;
@@ -1015,12 +1015,8 @@ static int sendrecv_recv_comm_recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, v
 void nccl_net_ofi_sendrecv_ep_t::sendrecv_endpoint_abort()
 {
 	pthread_wrapper domain_lock(&this->domain->domain_lock);
-
 	int dev_id = this->domain->get_device()->dev_id;
-
 	nccl_ofi_ofiutils_ep_release(this->ofi_ep, this->av, dev_id);
-	this->ofi_ep = nullptr;
-	this->av = nullptr;
 
 	this->domain->invalidate();
 }
@@ -1325,7 +1321,7 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 	int dev_id = device->dev_id;
 
 	/* Insert remote EP address to AV */
-	ret = fi_av_insert(ep->av, (void *)remote_ep_addr, 1,
+	ret = fi_av_insert(ep->av.get(), (void *)remote_ep_addr, 1,
 			   &remote_ep, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
 		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %s",
@@ -1387,7 +1383,7 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 	 */
 	if (!ofi_nccl_gdr_flush_disable() && support_gdr == GDR_SUPPORTED && !cuda_flush) {
 		r_comm->flush_buff.size = NCCL_OFI_FLUSH_SIZE;
-		ret = sendrecv_recv_comm_alloc_and_reg_flush_buff(ofi_domain, ep->ofi_ep, key_pool,
+		ret = sendrecv_recv_comm_alloc_and_reg_flush_buff(ofi_domain, ep->ofi_ep.get(), key_pool,
 								  &r_comm->flush_buff, dev_id);
 		if (OFI_UNLIKELY(ret != 0)) {
 			free(r_comm);
@@ -1659,13 +1655,13 @@ int nccl_net_ofi_sendrecv_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 
 	dev_id = device->dev_id;
 
-	local_ep_name = sendrecv_get_local_address(this->ofi_ep);
+	local_ep_name = sendrecv_get_local_address(this->ofi_ep.get());
 	if (local_ep_name == nullptr) {
 		return -EINVAL;
 	}
 
 	/* Insert local EP address to AV. This will be used to issue local read operations */
-	num_addrs = fi_av_insert(this->av, (void *)local_ep_name, 1, &local_ep_addr, 0, NULL);
+	num_addrs = fi_av_insert(this->av.get(), (void *)local_ep_name, 1, &local_ep_addr, 0, NULL);
 
 	/* Only 1 address should be inserted into the AV */
 	if (OFI_UNLIKELY(num_addrs != 1)) {
@@ -1690,7 +1686,7 @@ int nccl_net_ofi_sendrecv_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 	l_comm->base.base.dev_id = dev_id;
 	l_comm->base.accept = sendrecv_listen_comm_accept;
 	l_comm->base.close = sendrecv_listen_comm_close;
-	l_comm->local_ep = this->ofi_ep;
+	l_comm->local_ep = this->ofi_ep.get();
 	l_comm->local_ep_addr = local_ep_addr;
 
 	l_comm->listener = domain_ptr->cm->listen();
@@ -1906,7 +1902,7 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 	ret_s_comm->base.write = NULL;
 	ret_s_comm->base.write_inline = NULL;
 	ret_s_comm->tag = 0; /* Populate later from connect response */
-	ret_s_comm->local_ep = ep->ofi_ep;
+	ret_s_comm->local_ep = ep->ofi_ep.get();
 
 	ret_s_comm->remote_ep = 0; /* Populate later from connect response */
 	ret_s_comm->connector = nullptr;
@@ -1919,7 +1915,7 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 
 	conn_info->ep_namelen = sizeof(conn_info->ep_name);
 
-	ret = fi_getname(&(ep->ofi_ep->fid),
+	ret = fi_getname(&(ep->ofi_ep.get()->fid),
 			 (void *)conn_info->ep_name,
 			 &conn_info->ep_namelen);
 	if (ret == -FI_ETOOSMALL) {
@@ -1998,7 +1994,7 @@ static inline int sendrecv_send_comm_process_conn_resp
 	s_comm->tag = conn_resp_msg.tag;
 
 	/* Insert remote address into AV */
-	int ret = fi_av_insert(ep->av,
+	int ret = fi_av_insert(ep->av.get(),
 			       conn_resp_msg.ep_name, 1,
 			       &s_comm->remote_ep, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
@@ -2106,6 +2102,7 @@ int nccl_net_ofi_sendrecv_ep_t::cleanup_resources()
 	/* cleanup_resources should only be called once per endpoint instance */
 	assert(!this->called_cleanup_resources);
 	this->called_cleanup_resources = true;
+
 	nccl_net_ofi_sendrecv_device_t *device = nullptr;
 
 	/* Validate device */
@@ -2114,9 +2111,7 @@ int nccl_net_ofi_sendrecv_ep_t::cleanup_resources()
 		NCCL_OFI_WARN("Invalid device provided");
 		ret = -EINVAL;
 	} else {
-		nccl_ofi_ofiutils_ep_release(this->ofi_ep, this->av, device->dev_id);
-		this->ofi_ep = nullptr;
-		this->av = nullptr;		
+		nccl_ofi_ofiutils_ep_release(this->ofi_ep, this->av, device->dev_id);	
 	}
 
 	assert(ret == 0);
@@ -2157,8 +2152,8 @@ nccl_net_ofi_sendrecv_ep_t::nccl_net_ofi_sendrecv_ep_t(nccl_net_ofi_sendrecv_dom
 	struct fid_domain *ofi_domain = this->sendrecv_endpoint_get_ofi_domain();
 	ret = nccl_ofi_ofiutils_init_connection(device->info,
 						ofi_domain,
-						&this->ofi_ep,
-						&this->av,
+						this->ofi_ep,
+						this->av,
 						domain_arg->cq);
 	if (ret != 0) {
 		throw std::runtime_error("sendrecv endpoint constructor: failed to init endpoint");

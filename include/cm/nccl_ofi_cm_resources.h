@@ -15,6 +15,7 @@
 #include "cm/nccl_ofi_cm_reqs.h"
 
 #include "nccl_ofi_freelist.h"
+#include "nccl_ofi_ofiwrapper.h"
 
 namespace nccl_ofi_cm {
 
@@ -78,7 +79,7 @@ public:
 	/**
 	 * Close associated ofi_ep, while leaving other resources open
 	 */
-	int close_ofi_ep();
+	void close_ofi_ep();
 
 	/* Menory registration/deregistration. Note: these functions are static
 	   to be usable with the freelist interface */
@@ -91,8 +92,8 @@ private:
 	nccl_ofi_idpool_t &mr_key_pool;
 
 	/* Created by CM */
-	fid_ep *ofi_ep;
-	fid_av *av;
+	FidEpPtr ofi_ep;
+	FidAvPtr av;
 };
 
 /**

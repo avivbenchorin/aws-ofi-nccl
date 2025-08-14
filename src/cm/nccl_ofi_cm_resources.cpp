@@ -12,7 +12,7 @@ endpoint::endpoint(nccl_net_ofi_domain_t &domain) :
 {
 	fi_info *info = domain.get_device()->get_ofi_info_for_cm();
 	fid_cq *cq = domain.get_ofi_cq_for_cm();
-	int ret = nccl_ofi_ofiutils_init_connection(info, ofi_domain, &this->ofi_ep, &this->av, cq);
+	int ret = nccl_ofi_ofiutils_init_connection(info, ofi_domain, this->ofi_ep, this->av, cq);
 	if (ret != 0) {
 		/* We can't return an error. If not caught, this is going to propagate up and
 		 * eventually terminate the program, which may or may not be what we want.
@@ -31,7 +31,7 @@ endpoint::~endpoint()
 
 int endpoint::get_ep_address(void *address, size_t &addr_len)
 {
-	int ret = fi_getname(&ofi_ep->fid, address, &addr_len);
+	int ret = fi_getname(&ofi_ep.get()->fid, address, &addr_len);
 	if (ret == -FI_ETOOSMALL) {
 		NCCL_OFI_WARN("Endpoint's address length (%zu) is larger than supplied buffer length",
 			      addr_len);
@@ -47,7 +47,7 @@ int endpoint::get_ep_address(void *address, size_t &addr_len)
 fi_addr_t endpoint::av_insert_address(const void *address)
 {
 	fi_addr_t ret_addr;
-	int ret = fi_av_insert(av, address, 1, &ret_addr, 0, NULL);
+	int ret = fi_av_insert(av.get(), address, 1, &ret_addr, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
 		NCCL_OFI_WARN("CM: Unable to insert remote address into address vector "
 			      "for device.");
@@ -151,10 +151,7 @@ cm_resources::~cm_resources()
 	   The endpoint must be closed first, since posted buffers and requests cannot
 	   be freed until the endpoint is closed.
 	 */
-	int ret = ep.close_ofi_ep();
-	if (ret != 0) {
-		NCCL_OFI_WARN("Failed to close OFI endpoint: %d", ret);
-	}
+	ep.close_ofi_ep();
 
 	/* Free all requests. (A unique_ptr would be better here so these can be freed
 	   automatically) */
@@ -232,7 +229,7 @@ int endpoint::reg_mr(void *ep_ptr, void *data, size_t size, void **mr_handle)
 	}
 
 	if (endpoint_mr) {
-		ret = fi_mr_bind(ret_handle->mr, &ep->ofi_ep->fid, 0);
+		ret = fi_mr_bind(ret_handle->mr, &ep->ofi_ep.get()->fid, 0);
 		if (OFI_UNLIKELY(ret != 0)) {
 			NCCL_OFI_WARN("CM: Unable to bind MR to EP. RC: %d, Error: %s",
 				      ret, fi_strerror(-ret));
@@ -263,7 +260,7 @@ int endpoint::send(nccl_ofi_cm_conn_msg &conn_msg, size_t size, mr_handle_t mr_h
 {
 	void *desc = fi_mr_desc(mr_handle.mr);
 
-	ssize_t ret = fi_send(ofi_ep, &conn_msg, size, desc,
+	ssize_t ret = fi_send(ofi_ep.get(), &conn_msg, size, desc,
 			      dest_addr, &req.ctx.ofi_ctx);
 	if (ret != 0 && ret != -FI_EAGAIN) {
 		NCCL_OFI_WARN("Error in call to fi_send. RC: %zd, Error: %s",
@@ -279,7 +276,7 @@ int endpoint::recv(nccl_ofi_cm_conn_msg &conn_msg, size_t size, mr_handle_t mr_h
 {
 	void *desc = fi_mr_desc(mr_handle.mr);
 
-	ssize_t ret = fi_recv(ofi_ep, &conn_msg, size, desc,
+	ssize_t ret = fi_recv(ofi_ep.get(), &conn_msg, size, desc,
 			      FI_ADDR_UNSPEC, &req.ctx.ofi_ctx);
 	if (ret != 0 && ret != -FI_EAGAIN) {
 		NCCL_OFI_WARN("Error posting rx buffer. RC: %zd, Error: %s",
@@ -291,14 +288,11 @@ int endpoint::recv(nccl_ofi_cm_conn_msg &conn_msg, size_t size, mr_handle_t mr_h
 }
 
 
-int endpoint::close_ofi_ep()
+void endpoint::close_ofi_ep()
 {
-	if (ofi_ep == nullptr) {
+	if (ofi_ep.get() == nullptr) {
 		NCCL_OFI_WARN("ep was already closed");
-		return -EINVAL;
+		return;
 	}
-
-	int ret = fi_close(&ofi_ep->fid);
-	ofi_ep = nullptr;
-	return ret;
+	ofi_ep.reset();
 }

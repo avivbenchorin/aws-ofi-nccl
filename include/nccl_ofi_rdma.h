@@ -18,6 +18,7 @@
 #include "nccl_ofi_log.h"
 #include "nccl_ofi_msgbuff.h"
 #include "nccl_ofi_scheduler.h"
+#include "nccl_ofi_ofiwrapper.h"
 #include "nccl_ofi_topo.h"
 #if HAVE_NVTX_TRACING
 #include <nvtx3/nvToolsExt.h>
@@ -829,10 +830,21 @@ protected:
  * specific rail.
  */
 struct nccl_net_ofi_ep_rail {
+	/* Default constructor */
+	nccl_net_ofi_ep_rail() = default;
+	
+	/* Move constructor and assignment */
+	nccl_net_ofi_ep_rail(nccl_net_ofi_ep_rail&&) = default;
+	nccl_net_ofi_ep_rail& operator=(nccl_net_ofi_ep_rail&&) = default;
+	
+	/* Delete copy operations since smart pointers are non-copyable */
+	nccl_net_ofi_ep_rail(const nccl_net_ofi_ep_rail&) = delete;
+	nccl_net_ofi_ep_rail& operator=(const nccl_net_ofi_ep_rail&) = delete;
+
 	uint16_t rail_id;
 
 	/* Local libfabric endpoint handle */
-	struct fid_ep *ofi_ep;
+	FidEpPtr ofi_ep;
 
 	/* Name of local libfabric endpoint */
 	char local_ep_name[MAX_EP_ADDR];
@@ -841,7 +853,7 @@ struct nccl_net_ofi_ep_rail {
 	size_t local_ep_name_len;
 
 	/* Address vector handle */
-	struct fid_av *av;
+	FidAvPtr av;
 
 	/*
 	 * Rx buffer management

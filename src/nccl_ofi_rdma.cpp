@@ -2342,10 +2342,10 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		ep_rail = ep->rdma_endpoint_get_control_rail(rail_id);
 		remote_rdma_ep_name = &remote_control_ep_names[rail_id];
 
-		comm_rail->local_ep = ep_rail->ofi_ep;
+		comm_rail->local_ep = ep_rail->ofi_ep.get();
 
-		/* Insert remote EP address to AV */
-		ret = fi_av_insert(ep_rail->av, (void *)remote_rdma_ep_name->ep_name, 1,
+		/* Insert remote address into AV */
+		ret = fi_av_insert(ep_rail->av.get(), (void *)remote_rdma_ep_name->ep_name, 1,
 				   &comm_rail->remote_addr, 0, NULL);
 		if (OFI_UNLIKELY(ret != 1)) {
 			NCCL_OFI_WARN("Unable to insert remote address into address vector "
@@ -2360,10 +2360,10 @@ static int init_send_comm_rails(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		ep_rail = ep->rdma_endpoint_get_rail(rail_id);
 		remote_rdma_ep_name = &remote_ep_names[rail_id];
 
-		comm_rail->local_ep = ep_rail->ofi_ep;
+		comm_rail->local_ep = ep_rail->ofi_ep.get();
 
 		/* Insert remote EP address to AV */
-		ret = fi_av_insert(ep_rail->av, (void *)remote_rdma_ep_name->ep_name, 1,
+		ret = fi_av_insert(ep_rail->av.get(), (void *)remote_rdma_ep_name->ep_name, 1,
 				   &comm_rail->remote_addr, 0, NULL);
 		if (OFI_UNLIKELY(ret != 1)) {
 			NCCL_OFI_WARN("Unable to insert remote address into address vector "
@@ -4385,10 +4385,10 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 		nccl_net_ofi_ep_rail_t *rail = ep->rdma_endpoint_get_control_rail(rail_id);
 		const nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->control_ep_names[rail_id];
 
-		comm_rail->local_ep = rail->ofi_ep;
+		comm_rail->local_ep = rail->ofi_ep.get();
 
 		/* Insert remote EP address to AV */
-		ret = fi_av_insert(rail->av, (void *)remote_ep_name->ep_name, 1,
+		ret = fi_av_insert(rail->av.get(), (void *)remote_ep_name->ep_name, 1,
 				   &comm_rail->remote_addr, 0, NULL);
 		if (OFI_UNLIKELY(ret != 1)) {
 			NCCL_OFI_WARN("Unable to insert remote address into address vector "
@@ -4397,7 +4397,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 			goto error;
 		}
 
-		ret = fi_av_insert(rail->av, (void *)rail->local_ep_name, 1,
+		ret = fi_av_insert(rail->av.get(), (void *)rail->local_ep_name, 1,
 				   &comm_rail->local_addr, 0, NULL);
 		if (OFI_UNLIKELY(ret != 1)) {
 			NCCL_OFI_WARN("Unable to insert local address into address vector "
@@ -4416,10 +4416,10 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 		nccl_net_ofi_ep_rail_t *rail = ep->rdma_endpoint_get_rail(rail_id);
 		const nccl_ofi_rdma_ep_name_t *remote_ep_name = &conn_msg->ep_names[rail_id];
 
-		comm_rail->local_ep = rail->ofi_ep;
+		comm_rail->local_ep = rail->ofi_ep.get();
 
 		/* Insert remote EP address to AV */
-		ret = fi_av_insert(rail->av, (void *)remote_ep_name->ep_name, 1,
+		ret = fi_av_insert(rail->av.get(), (void *)remote_ep_name->ep_name, 1,
 				   &comm_rail->remote_addr, 0, NULL);
 		if (OFI_UNLIKELY(ret != 1)) {
 			NCCL_OFI_WARN("Unable to insert remote address into address vector "
@@ -4428,7 +4428,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 			goto error;
 		}
 
-		ret = fi_av_insert(rail->av, (void *)rail->local_ep_name, 1,
+		ret = fi_av_insert(rail->av.get(), (void *)rail->local_ep_name, 1,
 				   &comm_rail->local_addr, 0, NULL);
 		if (OFI_UNLIKELY(ret != 1)) {
 			NCCL_OFI_WARN("Unable to insert local address into address vector "
@@ -5149,7 +5149,7 @@ static int post_rx_buffer(nccl_net_ofi_rdma_req_t *req,
 	msg.context = rdma_req_get_ofi_context(req, ep_rail->rail_id);
 
 	req->state = NCCL_OFI_RDMA_REQ_CREATED;
-	ssize_t rc = fi_recvmsg(ep_rail->ofi_ep, &msg, flags);
+	ssize_t rc = fi_recvmsg(ep_rail->ofi_ep.get(), &msg, flags);
 	if ((rc != 0) && (rc != -FI_EAGAIN)) {
 		NCCL_OFI_WARN("Error posting rx buffer. RC: %zd, Error: %s",
 			      rc, fi_strerror(-rc));
@@ -6264,8 +6264,6 @@ void nccl_net_ofi_rdma_ep_t::ep_rail_release(nccl_net_ofi_ep_rail_t *rail, int d
 {
 	nccl_ofi_ofiutils_ep_release(rail->ofi_ep, rail->av,
 				     dev_id);
-	rail->ofi_ep = NULL;
-	rail->av = NULL;
 }
 
 
@@ -6338,8 +6336,8 @@ int nccl_net_ofi_rdma_ep_t::ep_rail_init(int dev_id, uint16_t rail_id,
 
 	ret = nccl_ofi_ofiutils_init_connection(rail_info,
 						domain_rail->domain,
-						&ep_rail->ofi_ep,
-						&ep_rail->av,
+						ep_rail->ofi_ep,
+						ep_rail->av,
 						domain_rail->cq);
 	if (tclass != FI_TC_UNSPEC) {
 		fi_freeinfo(rail_info);
@@ -6350,7 +6348,7 @@ int nccl_net_ofi_rdma_ep_t::ep_rail_init(int dev_id, uint16_t rail_id,
 
 	ep_rail->rail_id = rail_id;
 
-	ret = set_local_address(ep_rail->ofi_ep, ep_rail);
+	ret = set_local_address(ep_rail->ofi_ep.get(), ep_rail);
 	if (ret != 0) {
 		nccl_net_ofi_rdma_ep_t::ep_rail_release(ep_rail, dev_id);
 		return ret;
@@ -6514,7 +6512,7 @@ static inline int init_max_write_inline_size_if_not_initialized(nccl_net_ofi_rdm
 	if (is_max_write_inline_size_initialized == false) {
 		/* Overwrite default max_write_inline_size value if
 		 * FI_OPT_INJECT_RMA_SIZE option is available */
-		ret = get_inject_rma_size_opt(ep->rdma_endpoint_get_rail(0)->ofi_ep,
+		ret = get_inject_rma_size_opt(ep->rdma_endpoint_get_rail(0)->ofi_ep.get(),
 					      &max_write_inline_size);
 		if (ret == 0) {
 			is_max_write_inline_size_initialized = true;
@@ -6584,9 +6582,9 @@ nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domai
 	this->use_long_rkeys = device->use_long_rkeys;
 
 	/* Zero-initialize the rails and control_rails vector elements */
-	this->rails = std::vector<nccl_net_ofi_ep_rail_t>(num_rails, nccl_net_ofi_ep_rail_t{});
+	this->rails.resize(num_rails);
 
-	this->control_rails = std::vector<nccl_net_ofi_ep_rail_t>(num_control_rails, nccl_net_ofi_ep_rail_t{});
+	this->control_rails.resize(num_control_rails);
 
 	ret = nccl_net_ofi_mutex_init(&this->pending_reqs_lock, NULL);
 	if (ret != 0) {
