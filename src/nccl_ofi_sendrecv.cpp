@@ -1204,7 +1204,7 @@ static int sendrecv_recv_comm_flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, 
 	/* Set request size */
 	req->size = r_comm->flush_buff.size;
 
-	*base_req = &req->base;
+	*base_req = req;
 
 	return ret;
 
@@ -1277,7 +1277,7 @@ static int sendrecv_recv_comm_alloc_and_reg_flush_buff(nccl_net_ofi_sendrecv_dom
 static int sendrecv_fl_req_entry_init(void *entry)
 {
 	auto req = static_cast<nccl_net_ofi_sendrecv_req_t *>(entry);
-	req->base.test = sendrecv_req_test;
+	req->test = sendrecv_req_test;
 	req->state = NCCL_OFI_SENDRECV_REQ_CREATED;
 
 	req->ctx.handle_cq_entry = sendrecv_req_handle_cq_entry;
@@ -1796,7 +1796,7 @@ static int sendrecv_send_comm_send(nccl_net_ofi_send_comm_t *send_comm, void *da
 	req->size = size;
 
 	/* Return request to NCCL */
-	*base_req = &req->base;
+	*base_req = req;
 
 	goto exit;
 

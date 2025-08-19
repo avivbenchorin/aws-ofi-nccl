@@ -4002,7 +4002,7 @@ static int flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	(r_comm->num_inflight_reqs)++;
 
-	*base_req = &req->base;
+	*base_req = req;
 
 	return ret;
 
@@ -4176,7 +4176,7 @@ static int rma_read(nccl_net_ofi_recv_comm_t *recv_comm, void* dest, size_t size
 	}
 
 	/* Return request to NCCL */
-	*base_req = &req->base;
+	*base_req = req;
 
 	goto exit;
 
@@ -4197,7 +4197,7 @@ static int rdma_fl_req_entry_init(void *entry)
 	auto req = static_cast<nccl_net_ofi_rdma_req_t *>(entry);
 	assert(req);
 	zero_nccl_ofi_req(req);
-	req->base.test = test;
+	req->test = test;
 
 	/* Initialize mutex for request access */
 	int ret = nccl_net_ofi_mutex_init(&req->req_lock, NULL);
@@ -5600,7 +5600,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 	}
 
 	/* Return request to NCCL */
-	*base_req = &req->base;
+	*base_req = req;
 	/* Increment next_msg_seq_num for next call */
 	s_comm->next_msg_seq_num = (s_comm->next_msg_seq_num + 1) & MSG_SEQ_NUM_MASK;
 
@@ -5948,7 +5948,7 @@ static int rma_write_impl(nccl_net_ofi_send_comm_t *send_comm, void* src, size_t
 	}
 
 	/* Return request to NCCL */
-	*base_req = &req->base;
+	*base_req = req;
 
 	goto exit;
 

@@ -241,13 +241,11 @@ typedef struct nccl_net_ofi_flush_data {
 class nccl_net_ofi_rdma_device_t;
 class nccl_net_ofi_rdma_domain_t;
 class nccl_net_ofi_rdma_ep_t;
+class nccl_net_ofi_rdma_req_t;
 
 class nccl_net_ofi_rdma_device_rail_t;
 class nccl_net_ofi_rdma_domain_rail_t;
 class nccl_net_ofi_ep_rail_t;
-
-struct nccl_net_ofi_rdma_req;
-typedef struct nccl_net_ofi_rdma_req nccl_net_ofi_rdma_req_t;
 
 typedef struct {
 	/* Rx buffer freelist item */
@@ -399,9 +397,8 @@ typedef struct {
 /*
  * @brief	RDMA request
  */
-typedef struct nccl_net_ofi_rdma_req {
-	nccl_net_ofi_req_t base;
-
+class nccl_net_ofi_rdma_req_t : public nccl_net_ofi_req_t {
+public:
 	nccl_net_ofi_context_t ctx[MAX_NUM_RAILS];
 
 	/* Associated Comm object */
@@ -452,7 +449,7 @@ typedef struct nccl_net_ofi_rdma_req {
 	int (*free)(nccl_net_ofi_rdma_req_t *req,
 		    bool dec_inflight_reqs);
 
-} nccl_net_ofi_rdma_req_t;
+};
 
 /*
  * Rdma endpoint name

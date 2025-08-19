@@ -124,14 +124,13 @@ class nccl_net_ofi_device_t;
 class nccl_net_ofi_domain_t;
 class nccl_net_ofi_ep_t;
 class nccl_net_ofi_plugin_t;
+class nccl_net_ofi_req_t;
 
-struct nccl_net_ofi_req;
 struct nccl_net_ofi_comm;
 struct nccl_net_ofi_listen_comm;
 struct nccl_net_ofi_send_comm;
 struct nccl_net_ofi_recv_comm;
 
-typedef struct nccl_net_ofi_req nccl_net_ofi_req_t;
 typedef struct nccl_net_ofi_comm nccl_net_ofi_comm_t;
 typedef struct nccl_net_ofi_listen_comm nccl_net_ofi_listen_comm_t;
 typedef struct nccl_net_ofi_send_comm nccl_net_ofi_send_comm_t;
@@ -145,7 +144,8 @@ typedef struct nccl_net_ofi_recv_comm nccl_net_ofi_recv_comm_t;
  * or flush, and will be freed by the callee of test when the request
  * is complete.
  */
-struct nccl_net_ofi_req {
+class nccl_net_ofi_req_t {
+public:
 	int (*test)(nccl_net_ofi_req_t *req, int *done, int *size);
 };
 
