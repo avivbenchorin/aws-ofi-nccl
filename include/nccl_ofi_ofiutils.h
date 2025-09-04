@@ -8,6 +8,7 @@
 #include <rdma/fabric.h>
 
 #include "nccl_ofi_param.h"
+#include "nccl_ofi_ofiwrapper.h"
 
 /*
  * Memeory util functions to ensure that the compiler does not optimize
@@ -31,19 +32,21 @@ int nccl_ofi_ofiutils_get_providers(const char *prov_include,
 /*
  * @brief	Allocates and initialises libfabric endpoint and AV.
  *
- * @param cq:	Completion queue to which the new endpoint will be bound
- * @return	Endpoint ep
- * @return	Address vector av
+ * @param info:		Fabric info for endpoint creation
+ * @param domain:	Fabric domain
+ * @param ep:		Output smart pointer for endpoint
+ * @param av:		Output smart pointer for address vector
+ * @param cq:		Completion queue to which the new endpoint will be bound
+ * @return		0 on success, negative error code on failure
  */
 int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *domain,
-				      struct fid_ep **ep,   struct fid_av **av,
+				      FidEpPtr& ep, FidAvPtr& av,
 				      struct fid_cq *cq);
 
 /*
  * @brief	Release libfabric endpoint and address vector
  */
-void nccl_ofi_ofiutils_ep_release(struct fid_ep *ep, struct fid_av *av,
-				  int dev_id);
+void nccl_ofi_ofiutils_ep_release(FidEpPtr& ep, FidAvPtr& av, int dev_id);
 
 /*
  * @brief	Free libfabric NIC info list.
