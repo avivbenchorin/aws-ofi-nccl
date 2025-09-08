@@ -38,6 +38,7 @@ noinst_HEADERS = \
 	nccl_ofi_system.h \
 	nccl_ofi_topo.h \
 	nccl_ofi_tracepoint.h \
+	ofi/nccl_ofi_ofiraii.h \
 	platform-aws.h \
 	internal/tuner/nccl_defaults.h \
 	stats/histogram.h \

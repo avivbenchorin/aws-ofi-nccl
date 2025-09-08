@@ -31,6 +31,7 @@ sources = \
 	nccl_ofi_ofiutils.cpp \
 	nccl_ofi_pthread.cpp \
 	nccl_ofi_dmabuf.cpp \
+	ofi/nccl_ofi_ofiraii.cpp \
 	nccl_ofi_ep_addr_list.cpp \
 	nccl_ofi_param.cpp \
 	tracepoint.cpp
