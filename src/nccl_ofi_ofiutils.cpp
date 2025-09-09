@@ -219,42 +219,117 @@ int nccl_ofi_ofiutils_get_providers(const char *prov_include,
 }
 
 
-int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *domain,
-				      struct fid_ep **ep, struct fid_av **av, struct fid_cq *cq)
+/**
+ * @brief	Create and initialize libfabric fabric using RAII wrapper
+ */
+shared_fabric_raii nccl_ofi_ofiutils_fabric_create(struct fi_info *info)
 {
-	int ret = 0;
+	if (!info || !info->fabric_attr) {
+		NCCL_OFI_WARN("Invalid fabric info provided");
+		return nullptr;
+	}
+
+	// Use RAII factory function - will return nullptr on failure
+	return make_shared_fabric(info->fabric_attr);
+}
+
+
+/**
+ * @brief	Create and initialize libfabric domain using RAII wrapper
+ */
+shared_domain_raii nccl_ofi_ofiutils_domain_create(shared_fabric_raii fabric, 
+						   struct fi_info *info)
+{
+	if (!fabric) {
+		NCCL_OFI_WARN("Invalid fabric provided to domain creation");
+		return nullptr;
+	}
+
+	if (!info) {
+		NCCL_OFI_WARN("Invalid info provided to domain creation");
+		return nullptr;
+	}
+
+	// Use RAII factory function - will return nullptr on failure
+	return make_shared_domain(fabric, info);
+}
+
+
+/**
+ * @brief	Create and initialize libfabric completion queue using RAII wrapper
+ */
+shared_cq_raii nccl_ofi_ofiutils_cq_create(shared_domain_raii domain, 
+					   struct fi_cq_attr *cq_attr)
+{
+	if (!domain) {
+		NCCL_OFI_WARN("Invalid domain provided to CQ creation");
+		return nullptr;
+	}
+
+	if (!cq_attr) {
+		NCCL_OFI_WARN("Invalid CQ attributes provided");
+		return nullptr;
+	}
+
+	// Use RAII factory function - will return nullptr on failure
+	return make_shared_cq(domain, *cq_attr);
+}
+
+
+/**
+ * @brief	Create and initialize libfabric address vector using RAII wrapper
+ */
+shared_av_raii nccl_ofi_ofiutils_av_create(shared_domain_raii domain)
+{
+	if (!domain) {
+		NCCL_OFI_WARN("Invalid domain provided to AV creation");
+		return nullptr;
+	}
+
 	struct fi_av_attr av_attr = {};
+	// Use RAII factory function - will return nullptr on failure
+	return make_shared_av(domain, av_attr);
+}
 
-	/* Create transport level communication endpoint(s) */
-	ret = fi_endpoint(domain, info, ep, NULL);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Couldn't allocate endpoint. RC: %d, ERROR: %s",
-			      ret, fi_strerror(-ret));
-		goto error;
+
+/**
+ * @brief	Create and initialize libfabric endpoint using RAII wrapper
+ */
+shared_ep_raii nccl_ofi_ofiutils_ep_create(struct fi_info *info, 
+					   shared_domain_raii domain,
+					   shared_av_raii av, 
+					   shared_cq_raii cq)
+{
+	if (!info) {
+		NCCL_OFI_WARN("Invalid info provided to endpoint creation");
+		return nullptr;
 	}
 
-	/* Open AV */
-	ret = fi_av_open(domain, &av_attr, av, NULL);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Couldn't open AV. RC: %d, ERROR: %s",
-			      ret, fi_strerror(-ret));
-		goto error;
+	if (!domain || !av || !cq) {
+		NCCL_OFI_WARN("Invalid parameters provided to endpoint creation");
+		return nullptr;
 	}
 
-	/* Bind CQ to endpoint */
-	ret = fi_ep_bind(*ep, &(cq->fid), FI_TRANSMIT | FI_RECV);
-	if (OFI_UNLIKELY(ret != 0)) {
+	// Create endpoint using RAII factory function
+	auto ep = make_shared_ep(domain, info);
+	if (!ep) {
+		return nullptr;
+	}
+
+	// Bind CQ to endpoint using RAII wrapper method
+	int ret = ep->bind_cq(cq, FI_TRANSMIT | FI_RECV);
+	if (ret != 0) {
 		NCCL_OFI_WARN("Couldn't bind EP-CQ. RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
-		goto error;
+		return nullptr;
 	}
 
-	/* Bind AV to endpoint */
-	ret = fi_ep_bind(*ep, &((*av)->fid), 0);
-	if (OFI_UNLIKELY(ret != 0)) {
+	// Bind AV to endpoint using RAII wrapper method
+	ret = ep->bind_av(av, 0);
+	if (ret != 0) {
 		NCCL_OFI_WARN("Couldn't bind EP-AV. RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
-		goto error;
+		return nullptr;
 	}
 
 	/*
@@ -275,9 +350,8 @@ int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *d
 #if HAVE_DECL_FI_OPT_SHARED_MEMORY_PERMITTED
 	{
 		bool optval = false;
-		ret = fi_setopt(&(*ep)->fid, FI_OPT_ENDPOINT,
-				FI_OPT_SHARED_MEMORY_PERMITTED, &optval,
-				sizeof(optval));
+		ret = ep->setopt(FI_OPT_ENDPOINT, FI_OPT_SHARED_MEMORY_PERMITTED,
+				 &optval, sizeof(optval));
 		if (ret == -FI_EOPNOTSUPP || ret == -FI_ENOPROTOOPT) {
 			/* One way we get here is running against
 			 * older libfabric builds that don't have
@@ -289,7 +363,7 @@ int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *d
 		} else if (ret != 0) {
 			NCCL_OFI_WARN("Disabling shared memory failed: %s",
 				      fi_strerror(-ret));
-			goto error;
+			return nullptr;
 		}
 	}
 #endif
@@ -309,9 +383,8 @@ int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *d
 			  FI_VERSION(1, 18)) && support_gdr != GDR_UNSUPPORTED) {
 #if (HAVE_CUDA && HAVE_DECL_FI_OPT_CUDA_API_PERMITTED)
 		bool optval = false;
-		ret = fi_setopt(&(*ep)->fid, FI_OPT_ENDPOINT,
-				FI_OPT_CUDA_API_PERMITTED, &optval,
-				sizeof(optval));
+		ret = ep->setopt(FI_OPT_ENDPOINT, FI_OPT_CUDA_API_PERMITTED,
+				 &optval, sizeof(optval));
 		if (ret == -FI_EOPNOTSUPP || ret == -FI_ENOPROTOOPT) {
 			if (support_gdr == GDR_SUPPORTED) {
 				/* If we got here, that means we previously said
@@ -320,7 +393,7 @@ int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *d
 				 * support GDR, we should just abort.
 				 */
 				NCCL_OFI_WARN("GDR support reported to NCCL but then couldn't be configured on an endpoint.  Cannot continue.");
-				goto error;
+				return nullptr;
 			} else {
 				NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Could not disable CUDA API usage for HMEM, disabling GDR");
 				/* If we can't disable CUDA, then we don't really
@@ -336,7 +409,7 @@ int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *d
 		} else {
 			NCCL_OFI_WARN("Failed to set FI_OPT_CUDA_API_PERMITTED. RC: %d, ERROR: %s",
 				      ret, fi_strerror(-ret));
-			goto error;
+			return nullptr;
 		}
 #elif HAVE_NEURON
 		/*
@@ -349,52 +422,66 @@ int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *d
 		support_gdr = GDR_SUPPORTED;
 #else
 		NCCL_OFI_WARN("Using Libfabric 1.18 API with GPUDirect RDMA support, and FI_OPT_CUDA_API_PERMITTED is not declared.");
-		ret = -EOPNOTSUPP;
-		goto error;
+		return nullptr;
 #endif
 	}
 	/* Run platform-specific endpoint configuration hook if declared */
 	if (platform_config_endpoint) {
-		ret = platform_config_endpoint(info, *ep);
-		if (ret != 0)
-			goto error;
+		ret = platform_config_endpoint(info, ep);
+		if (ret != 0) {
+			return nullptr;
+		}
 	}
 
-	/* Enable endpoint for communication */
-	ret = fi_enable(*ep);
-	if (OFI_UNLIKELY(ret != 0)) {
+	/* Enable endpoint for communication using RAII wrapper method */
+	ret = ep->enable();
+	if (ret != 0) {
 		NCCL_OFI_WARN("Couldn't enable endpoint. RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
-		goto error;
+		return nullptr;
 	}
 
-	return ret;
- error:
-	if (*ep) {
-		fi_close((fid_t)*ep);
-		*ep = NULL;
+	return ep;
+}
+
+
+/**
+ * @brief	Register memory region with libfabric using RAII wrapper
+ */
+shared_mr_raii nccl_ofi_ofiutils_mr_regattr(shared_domain_raii domain, 
+					    struct fi_mr_attr *mr_attr, 
+					    uint64_t flags)
+{
+	if (!domain) {
+		NCCL_OFI_WARN("Invalid domain provided to MR registration");
+		return nullptr;
 	}
 
-	if (*av) {
-		fi_close((fid_t)*av);
-		*av = NULL;
+	if (!mr_attr) {
+		NCCL_OFI_WARN("Invalid MR attributes provided");
+		return nullptr;
 	}
 
-	return ret;
+	// Use RAII factory function - will return nullptr on failure
+	return make_shared_mr(domain, *mr_attr, flags);
 }
 
 /*
- * @brief	Release libfabric endpoint, address vector, and completion queue
+ * @brief	Release libfabric endpoint and address vector using RAII wrappers
  */
-void nccl_ofi_ofiutils_ep_release(struct fid_ep *ep, struct fid_av *av, int dev_id)
+void nccl_ofi_ofiutils_ep_release(shared_ep_raii ep, shared_av_raii av, int dev_id)
 {
-	if (ep)
-		fi_close((fid_t)ep);
-
-	if (av)
-		fi_close((fid_t)av);
-
-	NCCL_OFI_TRACE(NCCL_NET, "Libfabric endpoint and address vector of dev #%d is released", dev_id);
+	// With RAII wrappers, actual cleanup is automatic when shared_ptr ref count reaches 0
+	// This function primarily serves as a logging/debugging aid
+	if (ep) {
+		NCCL_OFI_TRACE(NCCL_NET, "Releasing endpoint for device %d", dev_id);
+	}
+	if (av) {
+		NCCL_OFI_TRACE(NCCL_NET, "Releasing address vector for device %d", dev_id);
+	}
+	
+	// Resources will be automatically cleaned up when ep and av go out of scope
+	// or when their reference counts reach zero
 }
 
 /*

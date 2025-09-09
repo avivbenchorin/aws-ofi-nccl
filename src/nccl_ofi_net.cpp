@@ -1098,14 +1098,14 @@ nccl_net_ofi_ep_t::nccl_net_ofi_ep_t(nccl_net_ofi_domain_t *domain_arg)
 }
 
 
-int get_inject_rma_size_opt(struct fid_ep *ofi_ep,
+int get_inject_rma_size_opt(shared_ep_raii ofi_ep,
 			    size_t *max_write_inline_size)
 {
 #if HAVE_DECL_FI_OPT_INJECT_RMA_SIZE
 	int ret;
 	size_t optlen = sizeof(size_t);
-	ret = fi_getopt(&ofi_ep->fid, FI_OPT_ENDPOINT, FI_OPT_INJECT_RMA_SIZE,
-			max_write_inline_size, &optlen);
+	ret = ofi_ep->getopt(FI_OPT_ENDPOINT, FI_OPT_INJECT_RMA_SIZE,
+			     max_write_inline_size, &optlen);
 	if (ret != 0 && ret != -FI_ENOPROTOOPT) {
 		NCCL_OFI_WARN("Retrieving option endpoint FI_OPT_INJECT_RMA_SIZE failed. RC: %d. Error: %s",
 			      ret, fi_strerror(-ret));

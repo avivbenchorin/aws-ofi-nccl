@@ -52,7 +52,13 @@ int nccl_net_ofi_sendrecv_mr_handle_t::get_mr_key(uint64_t *mr_key_ptr)
 {
 	int ret = 0;
 
-	uint64_t key = fi_mr_key(this->mr);
+	if (!this->mr) {
+		ret = -ENOENT;
+		NCCL_OFI_WARN("Invalid MR handle provided");
+		return ret;
+	}
+
+	uint64_t key = this->mr->key();
 	if (OFI_UNLIKELY(key == FI_KEY_NOTAVAIL)) {
 		ret = -ENOENT;
 		NCCL_OFI_WARN("Error retrieving MR key, leaking key");
@@ -204,7 +210,7 @@ static int sendrecv_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 
 
 static int sendrecv_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
-					   struct fid_cq *cq,
+					   shared_cq_raii cq,
 					   struct fi_cq_err_entry *err_entry,
 					   uint16_t rail_id)
 {
@@ -215,9 +221,8 @@ static int sendrecv_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
 		      req,
 		      err_entry->err,
 		      err_entry->prov_errno,
-		      fi_cq_strerror(cq,
-				     err_entry->prov_errno,
-				     err_entry->err_data, NULL, 0),
+		      cq->strerror(err_entry->prov_errno,
+				   err_entry->err_data, NULL, 0),
 		      (long)err_entry->len,
 		      nccl_net_ofi_req_str(req));
 
@@ -270,12 +275,12 @@ static inline int sendrecv_process_completions(struct fi_cq_tagged_entry *cq_ent
  * @return	0, on success
  *		error, on others
  */
-static int sendrecv_cq_process(struct fid_cq *cq)
+static int sendrecv_cq_process(shared_cq_raii cq)
 {
 	ssize_t rc = 0;
 	int ret = 0;
 	/*
-	 * On call to fi_cq_readerr, Libfabric requires some members of
+	 * On call to read_error, Libfabric requires some members of
 	 * err_entry to be zero-initialized or point to valid data.  For
 	 * simplicity, just zero out the whole struct.
 	 */
@@ -284,7 +289,7 @@ static int sendrecv_cq_process(struct fid_cq *cq)
 
 	while (true) {
 		/* Receive completions for the given endpoint */
-		rc = fi_cq_read(cq, cqe_tagged_buffers, cq_read_count);
+		rc = cq->read(cqe_tagged_buffers, cq_read_count);
 		if (rc > 0) {
 			ret = sendrecv_process_completions(
 				cqe_tagged_buffers, rc);
@@ -294,16 +299,16 @@ static int sendrecv_cq_process(struct fid_cq *cq)
 		else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
 			nccl_net_ofi_context_t *ctx;
 
-			rc = fi_cq_readerr(cq, &err_buffer, 0);
+			rc = cq->read_error(&err_buffer, 0);
 
 			if (OFI_UNLIKELY(rc == -FI_EAGAIN)) {
 				/*
 				 * Error not available yet.
-				 * fi_cq_read will keep returning -FI_EAVAIL so just bail out and try again later.
+				 * read will keep returning -FI_EAVAIL so just bail out and try again later.
 				 */
 				break;
 			} else if (OFI_UNLIKELY(rc < 0)) {
-				NCCL_OFI_WARN("Unable to read from fi_cq_readerr. RC: %zd. Error: %s",
+				NCCL_OFI_WARN("Unable to read from cq read_error. RC: %zd. Error: %s",
 					      rc,
 					      fi_strerror(-rc));
 				ret = rc;
@@ -523,8 +528,8 @@ typedef struct {
  * @return	0 on success
  *		non-zero on error
  */
-static int sendrecv_mr_buffers_register(struct fid_domain *domain,
-					struct fid_ep *ep,
+static int sendrecv_mr_buffers_register(shared_domain_raii domain,
+					shared_ep_raii ep,
 					nccl_ofi_idpool_t *key_pool,
 					int dev_id,
 					nccl_ofi_mr_ckey_ref ckey,
@@ -590,22 +595,24 @@ static int sendrecv_mr_buffers_register(struct fid_domain *domain,
 		mr_attr.requested_key = ret_handle->mr_key;
 	}
 
-	ret = fi_mr_regattr(domain, &mr_attr, regattr_flags, &ret_handle->mr);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Unable to register memory (type = %d) for device %d. RC: %d, Error: %s",
-			      type, dev_id, ret, fi_strerror(-ret));
+	try {
+		ret_handle->mr = make_shared_mr(domain, mr_attr, regattr_flags);
+	} catch (const std::runtime_error& e) {
+		NCCL_OFI_WARN("Unable to register memory (type = %d) for device %d. Error: %s",
+			      type, dev_id, e.what());
+		ret = -EINVAL;
 		goto exit;
 	}
 
 	if (endpoint_mr) {
-		ret = fi_mr_bind(ret_handle->mr, &ep->fid, 0);
+		ret = ret_handle->mr->bind_ep(ep, 0);
 		if (OFI_UNLIKELY(ret != 0)) {
 			NCCL_OFI_WARN("Unable to bind MR to EP (type = %d) for device %d. RC: %d, Error: %s",
 				      type, dev_id, ret, fi_strerror(-ret));
 			goto exit;
 		}
 
-		ret = fi_mr_enable(ret_handle->mr);
+		ret = ret_handle->mr->enable();
 		if (OFI_UNLIKELY(ret != 0)) {
 			NCCL_OFI_WARN("Unable to enable MR (type = %d) for device %d. RC: %d, Error: %s",
 				      type, dev_id, ret, fi_strerror(-ret));
@@ -675,7 +682,7 @@ exit:
  * @return	0 on success
  *		non-zero on error
  */
-static int sendrecv_mr_buffers_internal_register(struct fid_domain *domain, struct fid_ep *ep,
+static int sendrecv_mr_buffers_internal_register(shared_domain_raii domain, shared_ep_raii ep,
 					nccl_ofi_idpool_t *key_pool, int dev_id,
 					void *data, size_t size,
 					int type, nccl_net_ofi_sendrecv_mr_handle_t **mr_handle)
@@ -689,7 +696,7 @@ static int sendrecv_mr_buffers_internal_register(struct fid_domain *domain, stru
 }
 
 
-static int sendrecv_mr_base_register(struct fid_domain *domain, struct fid_ep *ep,
+static int sendrecv_mr_base_register(shared_domain_raii domain, shared_ep_raii ep,
 				     nccl_ofi_idpool_t *key_pool, int dev_id,
 				     nccl_ofi_mr_ckey_ref ckey, int type,
 				     nccl_net_ofi_sendrecv_mr_handle_t **mhandle)
@@ -745,13 +752,7 @@ static int sendrecv_comm_mr_base_dereg(nccl_net_ofi_sendrecv_mr_handle_t *mr_han
 		key_pool->free_id(mr_handle->mr_key);
 	}
 
-	if (mr_handle->mr != nullptr) {
-		ret = fi_close(&mr_handle->mr->fid);
-		if (OFI_UNLIKELY(ret != 0)) {
-			NCCL_OFI_WARN("Unable to de-register memory. RC: %d, Error: %s",
-				ret, fi_strerror(-ret));
-		}
-	}
+	/* RAII wrapper will automatically handle fi_close when mr goes out of scope */
 	delete mr_handle;
 
 	return ret;
@@ -810,9 +811,7 @@ static int sendrecv_comm_mr_base_reg(nccl_net_ofi_comm_t *base_comm,
 	}
 
 	key_pool = domain->mr_rkey_pool;
-	struct fid_domain *ofi_domain;
-	ofi_domain = ep->sendrecv_endpoint_get_ofi_domain();
-	ret = sendrecv_mr_base_register(ofi_domain, ep->ofi_ep, key_pool,
+	ret = sendrecv_mr_base_register(domain->domain, ep->ofi_ep, key_pool,
 					dev_id, ckey, type, &ret_handle);
 	if (OFI_UNLIKELY(ret_handle == NULL || ret != 0)) {
 		ret_handle = NULL;
@@ -970,7 +969,7 @@ static int sendrecv_recv_comm_recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, v
 		void *desc = NULL;
 
 		if (mr_handles[recv_n]->mr != nullptr) {
-			desc = fi_mr_desc(mr_handles[recv_n]->mr);
+			desc = mr_handles[recv_n]->mr->desc();
 		}
 
 		NCCL_OFI_TRACE_RECV_SENDRECV(dev_id, r_comm, sizes[recv_n], req, base_req);
@@ -981,7 +980,7 @@ static int sendrecv_recv_comm_recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, v
 		 */
 
 		/* Try posting buffer to local EP */
-		rc = fi_trecv(r_comm->local_ep, buffers[recv_n], sizes[recv_n],
+		rc = r_comm->local_ep->trecv(buffers[recv_n], sizes[recv_n],
 			      desc, FI_ADDR_UNSPEC, r_comm->tag, 0, sendrecv_req_get_ofi_context(req));
 		if (rc == -FI_EAGAIN) {
 			/* Return NULL request */
@@ -1031,7 +1030,6 @@ static int sendrecv_recv_comm_close(nccl_net_ofi_recv_comm_t *recv_comm)
 	nccl_net_ofi_sendrecv_recv_comm_t *r_comm =
 		(nccl_net_ofi_sendrecv_recv_comm_t *)recv_comm;
 	int ret = 0;
-	nccl_net_ofi_sendrecv_mr_handle_t *mr_handle = nullptr;
 
 	/* Retrieve and validate endpoint */
 	auto *ep = reinterpret_cast<nccl_net_ofi_sendrecv_ep_t *>(r_comm->base.base.ep);
@@ -1052,16 +1050,7 @@ static int sendrecv_recv_comm_close(nccl_net_ofi_recv_comm_t *recv_comm)
 
 	if (!ofi_nccl_gdr_flush_disable() && support_gdr == GDR_SUPPORTED && !cuda_flush) {
 		NCCL_OFI_TRACE(NCCL_NET, "De-registering buffer for flush operations");
-		/* Deregister Flush buffer memory region */
-		mr_handle = r_comm->flush_buff.mr_handle;
-		if (mr_handle) {
-			ret = fi_close(&mr_handle->mr->fid);
-			if (OFI_UNLIKELY(ret != 0)) {
-				NCCL_OFI_WARN("Unable to de-register memory. RC: %d, Error: %s",
-					      ret, fi_strerror(-ret));
-				goto exit;
-			}
-		}
+		/* RAII wrapper will automatically handle MR cleanup when mr_handle is deleted */
 		ret = nccl_net_ofi_dealloc_mr_buffer(r_comm->flush_buff.host_buffer,
 						    system_page_size);
 		if (ret != 0) {
@@ -1170,14 +1159,14 @@ static int sendrecv_recv_comm_flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, 
 	req->direction = NCCL_OFI_SENDRECV_RECV;
 
 	if (r_comm->flush_buff.mr_handle != NULL) {
-		/* Not checking for NULL flush_mr_desc as fi_mr_desc()
+		/* Not checking for NULL flush_mr_desc as desc()
 		 * returns valid descriptors by valid handles */
-		flush_mr_desc = fi_mr_desc(r_comm->flush_buff.mr_handle->mr);
+		flush_mr_desc = r_comm->flush_buff.mr_handle->mr->desc();
 	}
 
 	if (mr_handle->mr != nullptr) {
 		/* Extract remote key */
-		cuda_key = fi_mr_key(mr_handle->mr);
+		cuda_key = mr_handle->mr->key();
 		if (OFI_UNLIKELY(cuda_key == FI_KEY_NOTAVAIL)) {
 			ret = -ENOTSUP;
 			NCCL_OFI_WARN("Memory registration may not have completed.");
@@ -1189,7 +1178,7 @@ static int sendrecv_recv_comm_flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, 
 
 	/* Issue RDMA read */
 	do {
-		rc = fi_read(r_comm->local_ep, r_comm->flush_buff.host_buffer,
+		rc = r_comm->local_ep->read(r_comm->flush_buff.host_buffer,
 			     r_comm->flush_buff.size,
 			     flush_mr_desc,
 			     r_comm->local_ep_addr,
@@ -1200,7 +1189,7 @@ static int sendrecv_recv_comm_flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, 
 		} else if (rc == -FI_EAGAIN) {
 			/*
 			 * Process completions so that you have enough
-			 * resources for issuing fi_read
+			 * resources for issuing read
 			 */
 			ret = sendrecv_cq_process(domain_ptr->cq);
 			if (OFI_UNLIKELY(ret != 0))
@@ -1235,8 +1224,10 @@ static int sendrecv_recv_comm_flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, 
  * 		Success, receive communicator holds reference to flush buffer
  * 		and associated memory handle.
  *
- * @param	comp
- *		Valid receive object
+ * @param	domain
+ *		RAII domain wrapper
+ * @param	ep
+ *		RAII endpoint wrapper
  * @param	flush_buff
  *		Valid pointer to flush buffer
  * @param	dev_id
@@ -1245,7 +1236,7 @@ static int sendrecv_recv_comm_flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, 
  * @return	0, on success
  * 		error, on others
  */
-static int sendrecv_recv_comm_alloc_and_reg_flush_buff(struct fid_domain *domain, struct fid_ep *ep,
+static int sendrecv_recv_comm_alloc_and_reg_flush_buff(shared_domain_raii domain, shared_ep_raii ep,
 						       nccl_ofi_idpool_t *key_pool,
 						       nccl_net_ofi_sendrecv_flush_buffer_t *flush_buff,
 						       int dev_id)
@@ -1318,14 +1309,13 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 {
 	int ret = 0;
 	fi_addr_t remote_ep;
-	struct fid_domain *ofi_domain;
 	nccl_net_ofi_sendrecv_recv_comm_t *r_comm = NULL;
 	size_t req_size = sizeof(nccl_net_ofi_sendrecv_req_t);
 	nccl_ofi_idpool_t *key_pool = domain->mr_rkey_pool;
 	int dev_id = device->dev_id;
 
 	/* Insert remote EP address to AV */
-	ret = fi_av_insert(ep->av, (void *)remote_ep_addr, 1,
+	ret = ep->av->insert((void *)remote_ep_addr, 1,
 			   &remote_ep, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
 		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %s",
@@ -1379,15 +1369,13 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 		return NULL;
 	}
 
-	ofi_domain = ep->sendrecv_endpoint_get_ofi_domain();
-
 	/*
 	 * Setup flush resources if using GPUDirect RDMA unless user disables
 	 * flush operations
 	 */
 	if (!ofi_nccl_gdr_flush_disable() && support_gdr == GDR_SUPPORTED && !cuda_flush) {
 		r_comm->flush_buff.size = NCCL_OFI_FLUSH_SIZE;
-		ret = sendrecv_recv_comm_alloc_and_reg_flush_buff(ofi_domain, ep->ofi_ep, key_pool,
+		ret = sendrecv_recv_comm_alloc_and_reg_flush_buff(domain->domain, ep->ofi_ep, key_pool,
 								  &r_comm->flush_buff, dev_id);
 		if (OFI_UNLIKELY(ret != 0)) {
 			free(r_comm);
@@ -1398,8 +1386,7 @@ static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_of
 	return r_comm;
 }
 
-
-static inline uint8_t *sendrecv_get_local_address(struct fid_ep *ep);
+static inline uint8_t *sendrecv_get_local_address(shared_ep_raii ep);
 
 /**
  * Prepare connect response message to be sent back to the connect() side
@@ -1608,27 +1595,25 @@ static int sendrecv_listen_comm_close(nccl_net_ofi_listen_comm_t *listen_comm)
 /*
  * @brief	Query local address for a libfabric endpoint
  *
- * @param	Network device
+ * @param	RAII endpoint wrapper
  *
  * @return	Local EP address, on success
  * 		NULL, others
  */
-static inline uint8_t *sendrecv_get_local_address(struct fid_ep *ep)
+static inline uint8_t *sendrecv_get_local_address(shared_ep_raii ep)
 {
 	int ret = 0;
 	size_t namelen = MAX_EP_ADDR;
 	uint8_t *local_ep_addr = (uint8_t *)calloc(namelen, sizeof(char));
 
-	ret = fi_getname(&ep->fid,
-			 (void *)local_ep_addr,
-			 &namelen);
+	ret = ep->getname((void *)local_ep_addr, &namelen);
 	if (ret == -FI_ETOOSMALL) {
 		NCCL_OFI_WARN("Endpoint's address length (%zu) is larger than supplied buffer length (%d)",
 			      namelen, MAX_EP_ADDR);
 		free(local_ep_addr);
 		return NULL;
 	} else if (ret != 0) {
-		NCCL_OFI_WARN("Call to fi_getname() failed with RC: %d, ERROR: %s",
+		NCCL_OFI_WARN("Call to getname() failed with RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
 		free(local_ep_addr);
 		return NULL;
@@ -1665,7 +1650,7 @@ int nccl_net_ofi_sendrecv_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 	}
 
 	/* Insert local EP address to AV. This will be used to issue local read operations */
-	num_addrs = fi_av_insert(this->av, (void *)local_ep_name, 1, &local_ep_addr, 0, NULL);
+	num_addrs = this->av->insert((void *)local_ep_name, 1, &local_ep_addr, 0, NULL);
 
 	/* Only 1 address should be inserted into the AV */
 	if (OFI_UNLIKELY(num_addrs != 1)) {
@@ -1781,7 +1766,7 @@ static int sendrecv_send_comm_send(nccl_net_ofi_send_comm_t *send_comm, void *da
 	req->direction = NCCL_OFI_SENDRECV_SEND;
 
 	if (mr_handle->mr != nullptr)
-		desc = fi_mr_desc(mr_handle->mr);
+		desc = mr_handle->mr->desc();
 
 	NCCL_OFI_TRACE_SEND_SENDRECV(req->dev_id, size, s_comm, 0, req, base_req);
 
@@ -1789,7 +1774,7 @@ static int sendrecv_send_comm_send(nccl_net_ofi_send_comm_t *send_comm, void *da
 	 * Try sending data to remote EP; Return NULL request
 	 * if not able to send.
 	 */
-	rc = fi_tsend(s_comm->local_ep, data, size, desc,
+	rc = s_comm->local_ep->tsend(data, size, desc,
 		      s_comm->remote_ep, s_comm->tag, sendrecv_req_get_ofi_context(req));
 	if (OFI_UNLIKELY(rc == -FI_EAGAIN)) {
 		/* Make progress for next try */
@@ -1919,15 +1904,14 @@ static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
 
 	conn_info->ep_namelen = sizeof(conn_info->ep_name);
 
-	ret = fi_getname(&(ep->ofi_ep->fid),
-			 (void *)conn_info->ep_name,
+	ret = ep->ofi_ep->getname((void *)conn_info->ep_name,
 			 &conn_info->ep_namelen);
 	if (ret == -FI_ETOOSMALL) {
 		NCCL_OFI_WARN("Endpoint's address length (%zu) is larger than supplied buffer length (%d)",
 			      conn_info->ep_namelen, MAX_EP_ADDR);
 		goto out;
 	} else if (ret != 0) {
-		NCCL_OFI_WARN("Call to fi_getname() failed with RC: %d, ERROR: %s",
+		NCCL_OFI_WARN("Call to getname() failed with RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
 		goto out;
 	}
@@ -1998,8 +1982,7 @@ static inline int sendrecv_send_comm_process_conn_resp
 	s_comm->tag = conn_resp_msg.tag;
 
 	/* Insert remote address into AV */
-	int ret = fi_av_insert(ep->av,
-			       conn_resp_msg.ep_name, 1,
+	int ret = ep->av->insert(conn_resp_msg.ep_name, 1,
 			       &s_comm->remote_ep, 0, NULL);
 	if (OFI_UNLIKELY(ret != 1)) {
 		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %d",
@@ -2144,7 +2127,6 @@ nccl_net_ofi_ep_t *nccl_net_ofi_sendrecv_domain_t::create_endpoint()
 nccl_net_ofi_sendrecv_ep_t::nccl_net_ofi_sendrecv_ep_t(nccl_net_ofi_sendrecv_domain_t *domain_arg)
 	: nccl_net_ofi_ep_t(domain_arg)
 {
-	int ret = 0;
 	nccl_net_ofi_sendrecv_device_t *device = nullptr;
 
 	device = domain_arg->sendrecv_domain_get_device();
@@ -2154,13 +2136,16 @@ nccl_net_ofi_sendrecv_ep_t::nccl_net_ofi_sendrecv_ep_t(nccl_net_ofi_sendrecv_dom
 	this->tag = 0;
 	this->max_tag = device->max_tag;
 
-	struct fid_domain *ofi_domain = this->sendrecv_endpoint_get_ofi_domain();
-	ret = nccl_ofi_ofiutils_init_connection(device->info,
-						ofi_domain,
-						&this->ofi_ep,
-						&this->av,
-						domain_arg->cq);
-	if (ret != 0) {
+	/* Create endpoint using RAII-compatible utility function */
+	try {
+		this->ofi_ep = nccl_ofi_ofiutils_ep_create(device->info,
+							   domain_arg->domain,
+							   this->av,
+							   domain_arg->cq);
+		if (!this->ofi_ep) {
+			throw std::runtime_error("Failed to create endpoint");
+		}
+	} catch (const std::exception& e) {
 		throw std::runtime_error("sendrecv endpoint constructor: failed to init endpoint");
 	}
 }
@@ -2169,7 +2154,6 @@ nccl_net_ofi_sendrecv_ep_t::nccl_net_ofi_sendrecv_ep_t(nccl_net_ofi_sendrecv_dom
 int nccl_net_ofi_sendrecv_domain_t::cleanup_resources()
 {
 	int ret = 0;
-	int err_code = 0;
 
 	/* cleanup_resources should only be called once per domain instance */
 	assert(!this->called_cleanup_resources);
@@ -2180,16 +2164,9 @@ int nccl_net_ofi_sendrecv_domain_t::cleanup_resources()
 		this->cm = nullptr;
 	}
 
-	if (this->cq) {
-		err_code = fi_close(&this->cq->fid);
-		if (err_code != 0) {
-			NCCL_OFI_WARN("Failed to cleanup cq: %d", ret);
-		}
-		this->cq = nullptr;
-	}
-
-	if (this->domain)
-		fi_close((fid_t)this->domain);
+	/* RAII wrappers will automatically handle fi_close when they go out of scope */
+	this->cq = nullptr;
+	this->domain = nullptr;
 
 	assert(ret == 0);
 
@@ -2208,25 +2185,24 @@ nccl_net_ofi_sendrecv_domain_t::~nccl_net_ofi_sendrecv_domain_t()
 nccl_net_ofi_sendrecv_domain_t::nccl_net_ofi_sendrecv_domain_t(nccl_net_ofi_sendrecv_device_t *device_arg)
 	: nccl_net_ofi_domain_t(device_arg)
 {
-	int ret;
 	struct fi_cq_attr cq_attr = {};
 
-	ret = fi_domain(device_arg->fabric, device_arg->info,
-			&this->domain, NULL);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Couldn't open a fabric access domain. RC: %d, ERROR: %s",
-			      ret, fi_strerror(-ret));
-		throw std::runtime_error("SENDRECV domain constructor: fi_domain failed");
+	/* Create domain using RAII wrapper */
+	try {
+		this->domain = make_shared_domain(device_arg->fabric, device_arg->info);
+	} catch (const std::runtime_error& e) {
+		NCCL_OFI_WARN("Couldn't open a fabric access domain. Error: %s", e.what());
+		throw std::runtime_error("SENDRECV domain constructor: domain creation failed");
 	}
 
-	/* Create a domain-shared completion queue */
+	/* Create a domain-shared completion queue using RAII wrapper */
 	cq_attr.format = FI_CQ_FORMAT_TAGGED;
 	cq_attr.size = ofi_nccl_cq_size();
-	ret = fi_cq_open(this->domain, &cq_attr, &this->cq, NULL);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
-			      ret, fi_strerror(-ret));
-		throw std::runtime_error("SENDRECV domain constructor: fi_cq_open failed");
+	try {
+		this->cq = make_shared_cq(this->domain, cq_attr);
+	} catch (const std::runtime_error& e) {
+		NCCL_OFI_WARN("Couldn't open CQ. Error: %s", e.what());
+		throw std::runtime_error("SENDRECV domain constructor: CQ creation failed");
 	}
 
 	this->cm = new nccl_ofi_connection_manager(*this,
@@ -2302,9 +2278,7 @@ int nccl_net_ofi_sendrecv_device_t::cleanup_resources()
 		}
 	}
 
-	if (this->fabric) {
-		fi_close(reinterpret_cast<fid_t>(this->fabric));
-	}
+	/* RAII wrapper will automatically handle fabric cleanup */
 
 	if (this->info != NULL) {
 		fi_freeinfo(this->info);
@@ -2332,9 +2306,6 @@ nccl_net_ofi_sendrecv_device_t::nccl_net_ofi_sendrecv_device_t(nccl_net_ofi_plug
 {
 	int ret;
 
-	/* at this point, we can safely call the destructor to clean
-	 * up */
-
 	/* Set device provider */
 	this->info = fi_dupinfo(info_arg);
 	if (!this->info) {
@@ -2343,12 +2314,10 @@ nccl_net_ofi_sendrecv_device_t::nccl_net_ofi_sendrecv_device_t(nccl_net_ofi_plug
 	}
 	this->prov_name = this->info->fabric_attr->prov_name;
 
-	/* Create fabric */
-	ret = fi_fabric(this->info->fabric_attr, &this->fabric, nullptr);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Couldn't open a fabric provider. RC: %d, ERROR: %s",
-			      ret, fi_strerror(-ret));
-		throw std::runtime_error("SENDRECV device constructor: fi_fabric failed");
+	/* Create fabric using RAII wrapper */
+	this->fabric = nccl_ofi_ofiutils_fabric_create(this->info);
+	if (!this->fabric) {
+		throw std::runtime_error("SENDRECV device constructor: fabric creation failed");
 	}
 
 	ret = this->sendrecv_device_prepare_for_connection();

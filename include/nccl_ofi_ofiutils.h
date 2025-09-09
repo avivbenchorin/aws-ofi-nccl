@@ -8,6 +8,7 @@
 #include <rdma/fabric.h>
 
 #include "nccl_ofi_param.h"
+#include "ofi/nccl_ofi_ofiraii.h"
 
 /*
  * Memeory util functions to ensure that the compiler does not optimize
@@ -27,23 +28,82 @@ int nccl_ofi_ofiutils_get_providers(const char *prov_include,
 				    struct fi_info **prov_info_list,
 				    unsigned int *num_prov_infos);
 
-
 /*
- * @brief	Allocates and initialises libfabric endpoint and AV.
+ * @brief	Create and initialize libfabric fabric using RAII wrapper
  *
- * @param cq:	Completion queue to which the new endpoint will be bound
- * @return	Endpoint ep
- * @return	Address vector av
+ * @param info		Fabric info for fabric creation
+ * @return		Shared RAII fabric wrapper on success, nullptr on failure
  */
-int nccl_ofi_ofiutils_init_connection(struct fi_info *info, struct fid_domain *domain,
-				      struct fid_ep **ep,   struct fid_av **av,
-				      struct fid_cq *cq);
+shared_fabric_raii nccl_ofi_ofiutils_fabric_create(struct fi_info *info);
 
 /*
- * @brief	Release libfabric endpoint and address vector
+ * @brief	Create and initialize libfabric domain using RAII wrapper
+ *
+ * @param fabric	Shared RAII fabric wrapper
+ * @param info		Fabric info for domain creation
+ * @return		Shared RAII domain wrapper on success, nullptr on failure
  */
-void nccl_ofi_ofiutils_ep_release(struct fid_ep *ep, struct fid_av *av,
-				  int dev_id);
+shared_domain_raii nccl_ofi_ofiutils_domain_create(shared_fabric_raii fabric, 
+						   struct fi_info *info);
+
+/*
+ * @brief	Create and initialize libfabric completion queue using RAII wrapper
+ *
+ * @param domain	Shared RAII domain wrapper
+ * @param cq_attr	CQ attributes for creation
+ * @return		Shared RAII CQ wrapper on success, nullptr on failure
+ */
+shared_cq_raii nccl_ofi_ofiutils_cq_create(shared_domain_raii domain, 
+					   struct fi_cq_attr *cq_attr);
+
+/*
+ * @brief	Create and initialize libfabric address vector using RAII wrapper
+ *
+ * @param domain	Shared RAII domain wrapper
+ * @return		Shared RAII AV wrapper on success, nullptr on failure
+ */
+shared_av_raii nccl_ofi_ofiutils_av_create(shared_domain_raii domain);
+
+/*
+ * @brief	Create and initialize libfabric endpoint using RAII wrapper
+ *
+ * Creates endpoint and binds it to the provided AV and CQ. Configures endpoint
+ * options and enables it for communication.
+ *
+ * @param info		Fabric info for endpoint creation
+ * @param domain	Shared RAII domain wrapper
+ * @param av		Shared RAII address vector wrapper to bind
+ * @param cq		Shared RAII completion queue wrapper to bind
+ * @return		Shared RAII endpoint wrapper on success, nullptr on failure
+ */
+shared_ep_raii nccl_ofi_ofiutils_ep_create(struct fi_info *info, 
+					   shared_domain_raii domain,
+					   shared_av_raii av, 
+					   shared_cq_raii cq);
+
+/*
+ * @brief	Register memory region with libfabric using RAII wrapper
+ *
+ * @param domain	Shared RAII domain wrapper
+ * @param mr_attr	Memory region attributes structure
+ * @param flags		Registration flags
+ * @return		Shared RAII MR wrapper on success, nullptr on failure
+ */
+shared_mr_raii nccl_ofi_ofiutils_mr_regattr(shared_domain_raii domain, 
+					    struct fi_mr_attr *mr_attr, 
+					    uint64_t flags);
+
+/*
+ * @brief	Release libfabric endpoint and address vector using RAII wrappers
+ *
+ * With RAII wrappers, this function primarily serves as a logging/debugging aid.
+ * Actual resource cleanup is handled automatically by the RAII destructors.
+ *
+ * @param ep		Shared RAII endpoint wrapper to release
+ * @param av		Shared RAII address vector wrapper to release
+ * @param dev_id	Device ID for logging purposes
+ */
+void nccl_ofi_ofiutils_ep_release(shared_ep_raii ep, shared_av_raii av, int dev_id);
 
 /*
  * @brief	Free libfabric NIC info list.

@@ -13,7 +13,7 @@
 #include <unordered_map>
 
 #include "cm/nccl_ofi_cm_reqs.h"
-
+#include "ofi/nccl_ofi_ofiraii.h"
 #include "nccl_ofi_freelist.h"
 
 namespace nccl_ofi_cm {
@@ -27,9 +27,9 @@ namespace nccl_ofi_cm {
 class endpoint
 {
 public:
-	/* Memory registration handle */
+	/* Memory registration handle using RAII wrapper */
 	struct mr_handle_t {
-		fid_mr *mr;
+		shared_mr_raii mr;
 		uint64_t mr_key;
 		endpoint &ep;
 	};
@@ -38,7 +38,8 @@ public:
 	 * Construct a new endpoint
 	 *
 	 * @param domain:
-	 *      OFI domain against which to construct this ep
+	 *      OFI domain object to which the CM endpoint will be bound.
+	 *      The CM will create its own endpoint using RAII wrappers.
 	 */
 	endpoint(nccl_net_ofi_domain_t &domain);
 
@@ -76,7 +77,7 @@ public:
 		 nccl_ofi_cm_req &req);
 
 	/**
-	 * Close associated ofi_ep, while leaving other resources open
+	 * Close associated ofi_ep. With RAII wrappers, this resets the shared_ptr.
 	 */
 	int close_ofi_ep();
 
@@ -87,12 +88,12 @@ public:
 	static int dereg_mr(void *handle_ptr);
 private:
 	/* Input to CM */
-	fid_domain *ofi_domain;
+	shared_domain_raii ofi_domain;
 	nccl_ofi_idpool_t &mr_key_pool;
 
 	/* Created by CM */
-	fid_ep *ofi_ep;
-	fid_av *av;
+	shared_ep_raii ofi_ep;
+	shared_av_raii av;
 };
 
 /**

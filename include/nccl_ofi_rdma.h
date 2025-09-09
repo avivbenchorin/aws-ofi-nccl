@@ -142,7 +142,7 @@ struct nccl_net_ofi_rdma_mr_handle_t : nccl_net_ofi_mr_handle_t {
 	uint16_t num_rails;
 
 	/* Array of size `num_rails' */
-	std::vector<struct fid_mr *> mr;
+	std::vector<shared_mr_raii> mr;
 };
 
 
@@ -492,7 +492,7 @@ typedef struct nccl_net_ofi_rdma_send_comm_rail {
 
 	/* Pointer to libfabric endpoint of corresponding rdma
 	 * endpoint rail */
-	struct fid_ep *local_ep;
+	shared_ep_raii local_ep;
 } nccl_net_ofi_rdma_send_comm_rail_t;
 
 /*
@@ -561,7 +561,7 @@ typedef struct nccl_net_ofi_rdma_recv_comm_rail {
 
 	/* Pointer to libfabric endpoint of corresponding rdma
 	 * endpoint rail */
-	struct fid_ep *local_ep;
+	shared_ep_raii local_ep;
 
 	/* Libfabric address of local endpoint used for flushing */
 	fi_addr_t local_addr;
@@ -653,9 +653,9 @@ struct nccl_net_ofi_rdma_domain_rail_t {
 	uint16_t rail_id;
 
 	/* Access domain handles */
-	struct fid_domain *domain;
+	shared_domain_raii domain;
 
-	struct fid_cq *cq;
+	shared_cq_raii cq;
 };
 
 
@@ -670,13 +670,13 @@ public:
 	 */	
 	nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_t *domain_args);
 	
-	inline struct fid_domain *get_ofi_domain_for_cm() override
+	inline shared_domain_raii get_ofi_domain_for_cm() override
 	{
 		assert(!domain_rails.empty());
 		return domain_rails[0].domain;
 	}
 
-	inline struct fid_cq *get_ofi_cq_for_cm() override
+	inline shared_cq_raii get_ofi_cq_for_cm() override
 	{
 		assert(!domain_rails.empty());
 		return domain_rails[0].cq;
@@ -879,7 +879,7 @@ struct nccl_net_ofi_ep_rail {
 	uint16_t rail_id;
 
 	/* Local libfabric endpoint handle */
-	struct fid_ep *ofi_ep;
+	shared_ep_raii ofi_ep;
 
 	/* Name of local libfabric endpoint */
 	char local_ep_name[MAX_EP_ADDR];
@@ -888,7 +888,7 @@ struct nccl_net_ofi_ep_rail {
 	size_t local_ep_name_len;
 
 	/* Address vector handle */
-	struct fid_av *av;
+	shared_av_raii av;
 
 	/*
 	 * Rx buffer management
@@ -1199,7 +1199,7 @@ struct nccl_net_ofi_rdma_device_rail_t {
 	struct fi_info *info;
 
 	/* Fabric handle */
-	struct fid_fabric *fabric;
+	shared_fabric_raii fabric;
 };
 
 

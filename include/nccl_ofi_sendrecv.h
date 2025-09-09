@@ -11,6 +11,7 @@
 #include "nccl_ofi.h"
 #include "nccl_ofi_freelist.h"
 #include "nccl_ofi_log.h"
+#include "ofi/nccl_ofi_ofiraii.h"
 
 /* This is the initial value of mr_key. At key deregisteration time,
  * it is used to validate if a key was generated and needed to be freed or not.
@@ -45,7 +46,7 @@ struct nccl_net_ofi_sendrecv_mr_handle_t : nccl_net_ofi_mr_handle_t {
 	 */
 	int get_mr_key(uint64_t *mr_key_ptr) override;
 	
-	struct fid_mr *mr = nullptr;
+	shared_mr_raii mr;
 };
 
 typedef struct nccl_net_ofi_sendrecv_listen_comm {
@@ -54,7 +55,7 @@ typedef struct nccl_net_ofi_sendrecv_listen_comm {
 	 * struct and its base struct. */
 	nccl_net_ofi_listen_comm_t base;
 
-	struct fid_ep *local_ep;
+	shared_ep_raii local_ep;
 	fi_addr_t local_ep_addr;
 	/* Saves temporary state when creating receive communicator object */
 	save_comm_state_t state;
@@ -74,7 +75,7 @@ typedef struct nccl_net_ofi_sendrecv_send_comm {
 	uint64_t tag;
 	fi_addr_t remote_ep;
 	fi_addr_t local_ep_addr;
-	struct fid_ep *local_ep;
+	shared_ep_raii local_ep;
 
 	nccl_ofi_cm_send_connector *connector;
 } nccl_net_ofi_sendrecv_send_comm_t;
@@ -99,7 +100,7 @@ typedef struct nccl_net_ofi_sendrecv_recv_comm {
 	uint64_t tag;
 	fi_addr_t remote_ep;
 	fi_addr_t local_ep_addr;
-	struct fid_ep *local_ep;
+	shared_ep_raii local_ep;
 
 	nccl_net_ofi_sendrecv_flush_buffer_t flush_buff;
 
@@ -119,12 +120,12 @@ class nccl_net_ofi_sendrecv_domain_t : public nccl_net_ofi_domain_t {
 public:
 	nccl_net_ofi_sendrecv_domain_t(nccl_net_ofi_sendrecv_device_t *device_arg);
 	
-	inline struct fid_domain *get_ofi_domain_for_cm() override
+	inline shared_domain_raii get_ofi_domain_for_cm() override
 	{
 		return domain;
 	}
 	
-	inline struct fid_cq *get_ofi_cq_for_cm() override
+	inline shared_cq_raii get_ofi_cq_for_cm() override
 	{
 		return cq;
 	}
@@ -137,11 +138,11 @@ public:
 	/* Caller must hold the device lock */
 	nccl_net_ofi_ep_t *create_endpoint() override;
 
-	/* Access Domain handle */
-	struct fid_domain *domain = nullptr;
+	/* Domain handle using RAII wrapper */
+	shared_domain_raii domain;
 
-	/* Completion Queue handle */
-	struct fid_cq *cq = nullptr;
+	/* Completion Queue handle using RAII wrapper */
+	shared_cq_raii cq;
 
 	/** 
 	 * Connection manager for this domain
@@ -204,11 +205,11 @@ public:
 	}
 
 	/**
-	 * @brief	Returns the domain, dependent on the platform.
+	 * @brief	Returns the RAII domain wrapper.
 	 *
-	 * @return	fid_domain for the device (P-series) or endpoint (Neuron).
+	 * @return	shared_domain_raii for the device (P-series) or endpoint (Neuron).
 	 */
-	inline struct fid_domain* sendrecv_endpoint_get_ofi_domain()
+	inline shared_domain_raii sendrecv_endpoint_get_ofi_domain()
 	{
 		return sendrecv_endpoint_get_domain()->domain;
 	}
@@ -233,11 +234,11 @@ public:
 	/* copy of device's max_tag to reading device information */
 	uint64_t max_tag;
 
-	/* Endpoint handle to communicate to */
-	struct fid_ep *ofi_ep = nullptr;
+	/* Endpoint handle using RAII wrapper */
+	shared_ep_raii ofi_ep;
 
-	/* Address vector handle */
-	struct fid_av *av = nullptr;
+	/* Address vector handle using RAII wrapper */
+	shared_av_raii av;
 
 protected:
 	/**
@@ -327,8 +328,8 @@ public:
 	// memory is not freed. These actions should include closing
 	// fabirc, domain, and cq as well as freeing prov_name.
 
-	/* Fabric handle */
-	struct fid_fabric *fabric = nullptr;
+	/* Fabric handle using RAII wrapper */
+	shared_fabric_raii fabric;
 
 protected:
 	/**

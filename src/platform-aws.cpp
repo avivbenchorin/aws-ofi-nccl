@@ -38,6 +38,7 @@
 #include "nccl_ofi_param.h"
 #include "nccl_ofi_pthread.h"
 #include "nccl_ofi_system.h"
+#include "ofi/nccl_ofi_ofiraii.h"
 
 
 /*
@@ -322,14 +323,14 @@ done:
  * validate that EFA is using RDMA write natively and not in an
  * emulated fasion.
  */
-static int validate_rdma_write(struct fid_ep *ep)
+static int validate_rdma_write(shared_ep_raii ep)
 {
 	int ret = 0;
 #if HAVE_DECL_FI_OPT_EFA_EMULATED_WRITE
 	bool optval;
 	size_t optlen = sizeof(optval);
 
-	ret = fi_getopt(&ep->fid, FI_OPT_ENDPOINT, FI_OPT_EFA_EMULATED_WRITE, &optval, &optlen);
+	ret = ep->getopt(FI_OPT_ENDPOINT, FI_OPT_EFA_EMULATED_WRITE, &optval, &optlen);
 	if (ret != 0) {
 		NCCL_OFI_WARN("Couldn't get FI_OPT_EFA_EMULATED_WRITE. RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
@@ -366,7 +367,7 @@ exit:
  * Returns 0 on success (ie, have_ordering is in a sane state) or
  * -error code on unexpected failure.
  */
-static int configure_ep_inorder(struct fid_ep *ep, int optname, const char* optname_name,
+static int configure_ep_inorder(shared_ep_raii ep, int optname, const char* optname_name,
 				bool *have_ordering)
 {
 #if HAVE_DECL_FI_OPT_EFA_WRITE_IN_ORDER_ALIGNED_128_BYTES
@@ -375,8 +376,7 @@ static int configure_ep_inorder(struct fid_ep *ep, int optname, const char* optn
 
 	*have_ordering = false;
 
-	ret = fi_setopt(&ep->fid, FI_OPT_ENDPOINT,
-			optname, &optval, sizeof(optval));
+	ret = ep->setopt(FI_OPT_ENDPOINT, optname, &optval, sizeof(optval));
 	if (ret == -FI_EOPNOTSUPP || ret == -FI_ENOPROTOOPT) {
 		NCCL_OFI_INFO(NCCL_INIT, "Setting %s not supported.", optname_name);
 	} else if (ret != 0) {
@@ -403,7 +403,7 @@ static int configure_ep_inorder(struct fid_ep *ep, int optname, const char* optn
  *
  * Returns 0 on success or -error code on unexpected failure.
  */
-static int configure_ep_max_msg_size(struct fid_ep *ep)
+static int configure_ep_max_msg_size(shared_ep_raii ep)
 {
 	int ret = 0;
 
@@ -416,7 +416,7 @@ static int configure_ep_max_msg_size(struct fid_ep *ep)
 		optval = std::max(optval, static_cast<size_t>(eager_max_size));
 	}
 
-	ret = fi_setopt(&ep->fid, FI_OPT_ENDPOINT, FI_OPT_MAX_MSG_SIZE, &optval, sizeof(optval));
+	ret = ep->setopt(FI_OPT_ENDPOINT, FI_OPT_MAX_MSG_SIZE, &optval, sizeof(optval));
 
 	NCCL_OFI_TRACE(NCCL_INIT, "fi_setopt(FI_OPT_MAX_MSG_SIZE) RC: %d", ret);
 
@@ -694,14 +694,14 @@ exit:
 	return ret;
 }
 
-int platform_config_endpoint(struct fi_info *info, struct fid_ep* endpoint) {
+int platform_config_endpoint(struct fi_info *info, shared_ep_raii endpoint) {
 	int ret = 0;
 #if HAVE_CUDA
 	const char *optname_name = "none";
 	int optname = -1;
 #endif
 
-	if (endpoint == NULL) {
+	if (!endpoint) {
 		NCCL_OFI_WARN("Unable to configure invalid endpoint");
 		ret = -EINVAL;
 		goto exit;

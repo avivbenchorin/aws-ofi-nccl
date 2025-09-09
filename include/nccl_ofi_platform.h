@@ -7,6 +7,7 @@
 
 #include <rdma/fabric.h>
 #include <rdma/fi_endpoint.h>
+#include "ofi/nccl_ofi_ofiraii.h"
 
 /* Declare platform-specific hooks that can be provided by platform-specific
  * source files (such as the optionally compiled platform_aws.c).  The functions
@@ -21,7 +22,7 @@ int platform_init(const char **provider_filter) __attribute__((weak));
 
 /* Platform-specific endpoint configuration hook
  */
-int platform_config_endpoint(struct fi_info *info, struct fid_ep *ep) __attribute__((weak));
+int platform_config_endpoint(struct fi_info *info, shared_ep_raii ep) __attribute__((weak));
 
 /* Platform-specific hook to sort in the multi-rail protocol of the
  * plugin

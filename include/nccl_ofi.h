@@ -19,6 +19,7 @@
 #include "nccl_ofi_topo.h"
 #include "nccl_ofi_idpool.h"
 #include "nccl_ofi_mr.h"
+#include "ofi/nccl_ofi_ofiraii.h"
 
 /*
  * NCCL_NET_HANDLE_MAXSIZE is a limited resource (and defined in NCCL).
@@ -204,7 +205,7 @@ struct nccl_net_ofi_context {
 	 * @param rail_id: the rail on which the cq err entry arrived.
 	 * 		   Ignored in SENDRECV protocol
 	 */
-	int (*handle_error_entry)(struct nccl_net_ofi_context *ctx, struct fid_cq *cq,
+	int (*handle_error_entry)(struct nccl_net_ofi_context *ctx, shared_cq_raii cq,
 				  struct fi_cq_err_entry *err_entry, uint16_t rail_id);
 };
 typedef struct nccl_net_ofi_context nccl_net_ofi_context_t;
@@ -451,22 +452,26 @@ public:
 	 * constructor 
 	 */	
 	nccl_net_ofi_domain_t(nccl_net_ofi_device_t *device_arg);
-	
-	/**
-	 * Retrieve an fid_domain object associated with this domain to be used for 
-	 * connection management. There may be more than one fid_domain per domain,
-	 * depending on the transport; in that case, this will be the domain object
-	 * associated with the "leader NIC".
-	 */
-	virtual struct fid_domain *get_ofi_domain_for_cm() = 0;
 
 	/**
-	 * Retrieve an fid_cq object associated with this domain to be used for 
-	 * connection management. There may be more than one fid_cq per domain, depending
-	 * on the transport; in that case, this will be the cq object associated with the
-	 * "leader NIC".
+	 * Retrieve a RAII-wrapped domain object associated with this domain to be used for 
+	 * connection management. There may be more than one domain per domain,
+	 * depending on the transport; in that case, this will be the domain object
+	 * associated with the "leader NIC".
+	 * 
+	 * @return Shared pointer to RAII domain wrapper
 	 */
-	virtual struct fid_cq *get_ofi_cq_for_cm() = 0;
+	virtual shared_domain_raii get_ofi_domain_for_cm() = 0;
+
+	/**
+	 * Retrieve a RAII-wrapped completion queue object associated with this domain to be used for 
+	 * connection management. There may be more than one CQ per domain, depending
+	 * on the transport; in that case, this will be the CQ object associated with the
+	 * "leader NIC".
+	 * 
+	 * @return Shared pointer to RAII CQ wrapper
+	 */
+	virtual shared_cq_raii get_ofi_cq_for_cm() = 0;
 
 	/* Create a new endpoint
 	 *
@@ -1005,7 +1010,7 @@ int nccl_net_ofi_query_provider_capabilities(const struct fi_info *selected_prov
  *              -FI_ENOPROTOOPT, in case option to retrieve size is not available
  *              error, on others
  */
-int get_inject_rma_size_opt(struct fid_ep *ofi_ep,
+int get_inject_rma_size_opt(shared_ep_raii ofi_ep,
 			    size_t *max_write_inline_size);
 
 /*

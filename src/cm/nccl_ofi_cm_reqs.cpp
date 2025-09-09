@@ -23,7 +23,7 @@ static inline int cm_req_handle_cq_entry(nccl_net_ofi_context_t *ctx,
 }
 
 static inline int cm_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
-					    struct fid_cq *cq,
+					    shared_cq_raii cq,
 					    struct fi_cq_err_entry *err_entry,
 					    uint16_t rail_id)
 {
@@ -46,7 +46,7 @@ static inline int cm_req_handle_error_entry(nccl_net_ofi_context_t *ctx,
 	NCCL_OFI_WARN("Request %p completed with error. RC: %d. Error: %d (%s). Completed length: %ld",
 		req, err_entry->err,
 		err_entry->prov_errno,
-		fi_cq_strerror(cq, err_entry->prov_errno, err_entry->err_data, NULL, 0),
+		cq->strerror(err_entry->prov_errno, err_entry->err_data, NULL, 0),
 		(long)err_entry->len);
 
 	/*
