@@ -1306,93 +1306,6 @@ static int sendrecv_fl_req_entry_init(void *entry)
 }
 
 
-/*
- * @brief	Allocate and setup receive communicator object for a peer. This
- * 		prepares plugin to receive messages from the given peer.
- *
- * @param	Valid listen communicator object
- * 		Peer address
- *
- * @return	Receive communicator object, on success
- * 		NULL, on error
- */
-static nccl_net_ofi_sendrecv_recv_comm_t *sendrecv_recv_comm_prepare(nccl_net_ofi_sendrecv_listen_comm_t *l_comm,
-								     nccl_net_ofi_sendrecv_device_t *device,
-								     nccl_net_ofi_sendrecv_domain_t *domain,
-								     nccl_net_ofi_sendrecv_ep_t *ep,
-								     const char *remote_ep_addr)
-{
-	int ret = 0;
-	fi_addr_t remote_ep;
-	struct fid_domain *ofi_domain;
-	nccl_net_ofi_sendrecv_recv_comm_t *r_comm = NULL;
-	size_t req_size = sizeof(nccl_net_ofi_sendrecv_req_t);
-	nccl_ofi_idpool_t *key_pool = domain->mr_rkey_pool;
-	int dev_id = device->dev_id;
-
-	/* Insert remote EP address to AV */
-	ret = fi_av_insert(ep->av, (void *)remote_ep_addr, 1,
-			   &remote_ep, 0, NULL);
-	if (OFI_UNLIKELY(ret != 1)) {
-		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %s",
-			      dev_id, fi_strerror(-ret));
-		return NULL;
-	}
-
-	/* Build recv_comm */
-	r_comm = new nccl_net_ofi_sendrecv_recv_comm_t;
-
-	r_comm->type = NCCL_NET_OFI_RECV_COMM;
-	r_comm->num_inflight_reqs = 0;
-	r_comm->ep = ep;
-	r_comm->dev_id = dev_id;
-
-	/* Increase tag ID */
-	if (ep->tag + 1 >=
-		device->max_tag) {
-		    NCCL_OFI_WARN("Cannot open more connection for device ID %d."
-				  " Maximum is %ld",
-				  dev_id, device->max_tag);
-		    return nullptr;
-	}
-	r_comm->tag = ++ep->tag;
-
-	r_comm->local_ep = l_comm->local_ep;
-	r_comm->local_ep_addr = l_comm->local_ep_addr;
-	r_comm->remote_ep = remote_ep;
-
-	/* Pre-allocated buffers for data path */
-
-	ret = nccl_ofi_freelist_init(req_size, 16, 16, NCCL_OFI_MAX_REQUESTS,
-				     sendrecv_fl_req_entry_init, NULL,
-				     &r_comm->nccl_ofi_reqs_fl);
-	if (OFI_UNLIKELY(ret != 0)) {
-		NCCL_OFI_WARN("Could not allocate NCCL OFI requests free list for dev %d",
-			      dev_id);
-		delete r_comm;
-		return NULL;
-	}
-
-	ofi_domain = ep->sendrecv_endpoint_get_ofi_domain();
-
-	/*
-	 * Setup flush resources if using GPUDirect RDMA unless user disables
-	 * flush operations
-	 */
-	if (!ofi_nccl_gdr_flush_disable() && support_gdr == GDR_SUPPORTED && !cuda_flush) {
-		r_comm->flush_buff.size = NCCL_OFI_FLUSH_SIZE;
-		ret = sendrecv_recv_comm_alloc_and_reg_flush_buff(ofi_domain, ep->ofi_ep, key_pool,
-								  &r_comm->flush_buff, dev_id);
-		if (OFI_UNLIKELY(ret != 0)) {
-			delete r_comm;
-			return NULL;
-		}
-	}
-
-	return r_comm;
-}
-
-
 static inline uint8_t *sendrecv_get_local_address(struct fid_ep *ep);
 
 /**
@@ -1417,6 +1330,107 @@ static nccl_ofi_connection_info_t sendrecv_prepare_conn_resp_msg
 	conn_resp_msg.tag = r_comm->tag;
 
 	return conn_resp_msg;
+}
+
+
+/*
+ * @brief	Allocate and setup receive communicator object for a peer. This
+ * 		prepares plugin to receive messages from the given peer.
+ *
+ * @param	Valid listen communicator object
+ * 		Peer address
+ *
+ * @return	Receive communicator object, on success
+ * 		NULL, on error
+ */
+nccl_net_ofi_sendrecv_recv_comm_t::nccl_net_ofi_sendrecv_recv_comm_t(nccl_net_ofi_sendrecv_listen_comm_t *l_comm,
+								     nccl_net_ofi_sendrecv_device_t *device_arg,
+								     nccl_net_ofi_sendrecv_domain_t *domain_arg,
+								     nccl_net_ofi_sendrecv_ep_t *ep_arg,
+								nccl_ofi_cm_receiver * receiver_arg)
+	: nccl_net_ofi_recv_comm_t(NCCL_NET_OFI_RECV_COMM, ep_arg, device_arg->dev_id),
+	  num_inflight_reqs(0),
+	  local_ep_addr(l_comm->local_ep_addr),
+	  local_ep(l_comm->local_ep)
+{
+	int ret = 0;
+	const nccl_ofi_connection_info_t *conn_msg = nullptr;
+	nccl_ofi_connection_info_t conn_resp_msg = { };
+	fi_addr_t local_remote_ep;
+	struct fid_domain *ofi_domain;
+	size_t req_size = sizeof(nccl_net_ofi_sendrecv_req_t);
+	nccl_ofi_idpool_t *key_pool = domain_arg->mr_rkey_pool;
+
+	this->receiver = receiver_arg;
+
+	auto data_pair = this->receiver->get_conn_msg_data();
+	assert(data_pair.second == sizeof(nccl_ofi_connection_info_t));
+	conn_msg = static_cast<const nccl_ofi_connection_info_t *>
+		(data_pair.first);
+	
+	/* Insert remote EP address to AV */
+	ret = fi_av_insert(ep_arg->av, (void *)conn_msg->ep_name, 1,
+			   &local_remote_ep, 0, NULL);
+	if (OFI_UNLIKELY(ret != 1)) {
+		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d. RC: %s",
+			      dev_id, fi_strerror(-ret));
+		throw std::runtime_error("");
+	}
+
+	/* Increase tag ID */
+	if (ep_arg->tag + 1 >=
+		device_arg->max_tag) {
+		    NCCL_OFI_WARN("Cannot open more connection for device ID %d."
+				  " Maximum is %ld",
+				  this->dev_id, device_arg->max_tag);
+		    throw std::runtime_error("");
+	}
+	this->tag = ++ep_arg->tag;
+	this->remote_ep = local_remote_ep;
+
+	/* Pre-allocated buffers for data path */
+
+	ret = nccl_ofi_freelist_init(req_size, 16, 16, NCCL_OFI_MAX_REQUESTS,
+				     sendrecv_fl_req_entry_init, NULL,
+				     &this->nccl_ofi_reqs_fl);
+	if (OFI_UNLIKELY(ret != 0)) {
+		NCCL_OFI_WARN("Could not allocate NCCL OFI requests free list for dev %d",
+			      this->dev_id);
+		throw std::runtime_error("");
+	}
+
+	ofi_domain = ep_arg->sendrecv_endpoint_get_ofi_domain();
+
+	/*
+	 * Setup flush resources if using GPUDirect RDMA unless user disables
+	 * flush operations
+	 */
+	if (!ofi_nccl_gdr_flush_disable() && support_gdr == GDR_SUPPORTED && !cuda_flush) {
+		this->flush_buff.size = NCCL_OFI_FLUSH_SIZE;
+		ret = sendrecv_recv_comm_alloc_and_reg_flush_buff(ofi_domain, ep_arg->ofi_ep, key_pool,
+								  &this->flush_buff, this->dev_id);
+		if (OFI_UNLIKELY(ret != 0)) {
+			NCCL_OFI_WARN("Could not allocate NCCL OFI requests free list for dev %d",
+				      this->dev_id);
+			throw std::runtime_error("");
+		}
+	}
+
+	/*
+	 * The libfabric resources maintained by the endpoint
+	 * structure is passed from l_comm to r_comm so they can
+	 * then be used by nccl_net_ofi_irecv. We want to make
+	 * sure those resources are not freed up when we call
+	 * nccl_net_ofi_closeListen so we maintain an additional
+	 * refcnt and free it up when nccl_net_ofi_closeRecv is
+	 * called.
+	 */
+	ep_arg->increment_ref_cnt();
+
+	/* Prepare connect response message */
+	conn_resp_msg = sendrecv_prepare_conn_resp_msg(this);
+
+	this->receiver->set_conn_resp_msg_data(&conn_resp_msg, sizeof(conn_resp_msg));
 }
 
 
@@ -1455,9 +1469,6 @@ int nccl_net_ofi_sendrecv_listen_comm_t::accept(nccl_net_ofi_recv_comm_t **recv_
 
 	nccl_ofi_cm_receiver *receiver = nullptr;
 
-	const nccl_ofi_connection_info_t *conn_msg = nullptr;
-	nccl_ofi_connection_info_t conn_resp_msg = { };
-	
 	/*
 	 * Take appropriate actions based on connection stage of communicator.
 	 *
@@ -1487,41 +1498,10 @@ int nccl_net_ofi_sendrecv_listen_comm_t::accept(nccl_net_ofi_recv_comm_t **recv_
 			return 0;
 		}
 
-		{
-			auto data_pair = receiver->get_conn_msg_data();
-			assert(data_pair.second == sizeof(nccl_ofi_connection_info_t));
-			conn_msg = static_cast<const nccl_ofi_connection_info_t *>
-				(data_pair.first);
-		}
-
 		/* Prepare receive communicator object for the received peer connection */
-		r_comm = sendrecv_recv_comm_prepare(this, device, domain, ep_ptr,
-						    conn_msg->ep_name);
-		if (OFI_UNLIKELY(r_comm == nullptr)) {
-			return -ENOMEM;
-		}
-
-		/*
-		 * The libfabric resources maintained by the endpoint
-		 * structure is passed from l_comm to r_comm so they can
-		 * then be used by nccl_net_ofi_irecv. We want to make
-		 * sure those resources are not freed up when we call
-		 * nccl_net_ofi_closeListen so we maintain an additional
-		 * refcnt and free it up when nccl_net_ofi_closeRecv is
-		 * called.
-		 */
-		ep_ptr->increment_ref_cnt();
-
+		r_comm = new nccl_net_ofi_sendrecv_recv_comm_t(this, device, domain, ep_ptr, receiver);
+		
 		comm_state->comm = r_comm;
-
-		r_comm->receiver = receiver;
-		receiver = nullptr;
-
-		/* Prepare connect response message */
-		conn_resp_msg = sendrecv_prepare_conn_resp_msg(r_comm);
-
-		r_comm->receiver->set_conn_resp_msg_data(&conn_resp_msg, sizeof(conn_resp_msg));
-
 		comm_state->stage = COMM_CONN_RESP_REQ_PENDING;
 
 		fallthrough;
@@ -1624,14 +1604,47 @@ static inline uint8_t *sendrecv_get_local_address(struct fid_ep *ep)
 	return local_ep_addr;
 }
 
+
+nccl_net_ofi_sendrecv_listen_comm_t::nccl_net_ofi_sendrecv_listen_comm_t(nccl_net_ofi_sendrecv_ep_t *ep_arg,
+									 nccl_ofi_connection_manager *cm_arg,
+									 int dev_id_arg)
+	: nccl_net_ofi_listen_comm_t(NCCL_NET_OFI_LISTEN_COMM, ep_arg, dev_id_arg),
+	  local_ep(ep_arg->ofi_ep),
+	  state({.comm = nullptr, .stage = COMM_CREATE_START})
+{
+	uint8_t *local_ep_name = nullptr;
+	fi_addr_t temp_local_ep_addr;
+	int num_addrs;
+
+	local_ep_name = sendrecv_get_local_address(this->local_ep);
+	if (local_ep_name == nullptr) {
+		NCCL_OFI_WARN("%d", this->dev_id);
+		throw std::runtime_error("");
+	}
+
+	/* Insert local EP address to AV. This will be used to issue local read operations */
+	num_addrs = fi_av_insert(ep_arg->av, reinterpret_cast<void *>(local_ep_name), 1,
+				 &temp_local_ep_addr, 0, NULL);
+
+	/* Only 1 address should be inserted into the AV */
+	if (OFI_UNLIKELY(num_addrs != 1)) {
+		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d.",
+			      this->dev_id);
+		throw std::runtime_error("");
+	}
+
+	free(local_ep_name);
+
+	this->local_ep_addr = temp_local_ep_addr;
+
+	this->listener = cm_arg->listen();
+}
+
+
 int nccl_net_ofi_sendrecv_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 				       nccl_net_ofi_listen_comm_t **listen_comm)
 {
-	uint8_t *local_ep_name = nullptr;
-	fi_addr_t local_ep_addr;
-	nccl_net_ofi_sendrecv_listen_comm_t *l_comm = nullptr;
 	int dev_id = 0;
-	int num_addrs;
 	nccl_net_ofi_sendrecv_domain_t *domain_ptr = this->sendrecv_endpoint_get_domain();
 
 	pthread_wrapper domain_lock(&domain_ptr->domain_lock);
@@ -1646,40 +1659,13 @@ int nccl_net_ofi_sendrecv_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 
 	dev_id = device->dev_id;
 
-	local_ep_name = sendrecv_get_local_address(this->ofi_ep);
-	if (local_ep_name == nullptr) {
-		return -EINVAL;
-	}
-
-	/* Insert local EP address to AV. This will be used to issue local read operations */
-	num_addrs = fi_av_insert(this->av, (void *)local_ep_name, 1, &local_ep_addr, 0, NULL);
-
-	/* Only 1 address should be inserted into the AV */
-	if (OFI_UNLIKELY(num_addrs != 1)) {
-		NCCL_OFI_WARN("Unable to insert remote address into address vector for device %d.", dev_id);
-		return -EINVAL;
-	}
-
-	free(local_ep_name);
-
 	/* Build listen_comm */
-	l_comm = new nccl_net_ofi_sendrecv_listen_comm_t;
-
-	/* Initialize listen communicator */
-	l_comm->type = NCCL_NET_OFI_LISTEN_COMM;
-	l_comm->state.comm = nullptr;
-	l_comm->state.stage = COMM_CREATE_START;
-	l_comm->ep = this;
-	l_comm->dev_id = dev_id;
-	l_comm->local_ep = this->ofi_ep;
-	l_comm->local_ep_addr = local_ep_addr;
-
-	l_comm->listener = domain_ptr->cm->listen();
+	auto l_comm = new nccl_net_ofi_sendrecv_listen_comm_t(this, domain_ptr->cm, dev_id);
 
 	/* Build handle */
 	*handle = l_comm->listener->get_handle();
 
-	*listen_comm = static_cast<nccl_net_ofi_listen_comm_t *>(l_comm);
+	*listen_comm = l_comm;
 	return 0;
 }
 
@@ -1864,77 +1850,65 @@ int nccl_net_ofi_sendrecv_send_comm_t::write_inline(void* src, size_t size, uint
  * 		error, others
  *
  */
-static inline int sendrecv_send_comm_create(nccl_net_ofi_conn_handle_t *handle,
-					    nccl_net_ofi_sendrecv_ep_t *ep,
-					    nccl_ofi_connection_info_t *conn_info,
-					    nccl_net_ofi_sendrecv_send_comm_t **s_comm)
+nccl_net_ofi_sendrecv_send_comm_t::nccl_net_ofi_sendrecv_send_comm_t(nccl_net_ofi_conn_handle_t * handle, 
+								     nccl_net_ofi_sendrecv_ep_t *ep_arg,
+								     nccl_ofi_connection_manager *cm_arg,
+								     nccl_ofi_connection_info_t *conn_info,
+								     int dev_id_arg)
+	: nccl_net_ofi_send_comm_t(NCCL_NET_OFI_SEND_COMM, ep_arg, dev_id_arg),
+	  num_inflight_reqs(0),
+	  tag(0),
+	  remote_ep(0),
+	  local_ep(ep_arg->ofi_ep),
+	  connector(nullptr)
 {
 	size_t req_size = sizeof(nccl_net_ofi_sendrecv_req_t);
-	nccl_net_ofi_sendrecv_send_comm_t *ret_s_comm = NULL;
-	*s_comm = NULL;
 	int ret = 0;
 
 	/* Retrieve and validate device */
-	nccl_net_ofi_sendrecv_device_t *device = ep->sendrecv_endpoint_get_device();
-	if (OFI_UNLIKELY(device == NULL)) {
+	nccl_net_ofi_sendrecv_device_t *device = ep_arg->sendrecv_endpoint_get_device();
+	if (OFI_UNLIKELY(device == nullptr)) {
 		NCCL_OFI_WARN("Error accessing device.");
-		return -EINVAL;
+		throw std::runtime_error("");
 	}
 
-	/* Allocate and initialize send_comm */
-	ret_s_comm = new nccl_net_ofi_sendrecv_send_comm_t;
-
-	ret_s_comm->type = NCCL_NET_OFI_SEND_COMM;
-	ret_s_comm->num_inflight_reqs = 0;
-	ret_s_comm->ep = ep;
-	ret_s_comm->dev_id = device->dev_id;
-	ret_s_comm->tag = 0; /* Populate later from connect response */
-	ret_s_comm->local_ep = ep->ofi_ep;
-
-	ret_s_comm->remote_ep = 0; /* Populate later from connect response */
-	ret_s_comm->connector = nullptr;
+	this->dev_id = device->dev_id;
 
 	/* The connect() API function acquired the endpoint we are using via
 	   get_ep(). Increase the refcnt so the endpoint is not freed when the
 	   API releases it.
 	   Caller assumed to hold the domain lock. */
-	ep->increment_ref_cnt();
+	ep_arg->increment_ref_cnt();
 
 	conn_info->ep_namelen = sizeof(conn_info->ep_name);
 
-	ret = fi_getname(&(ep->ofi_ep->fid),
-			 (void *)conn_info->ep_name,
+	ret = fi_getname(&this->local_ep->fid,
+			 reinterpret_cast<void *>(conn_info->ep_name),
 			 &conn_info->ep_namelen);
 	if (ret == -FI_ETOOSMALL) {
 		NCCL_OFI_WARN("Endpoint's address length (%zu) is larger than supplied buffer length (%d)",
 			      conn_info->ep_namelen, MAX_EP_ADDR);
-		goto out;
+		ep_arg->decrement_ref_cnt();
+		throw std::runtime_error("");
 	} else if (ret != 0) {
 		NCCL_OFI_WARN("Call to fi_getname() failed with RC: %d, ERROR: %s",
 			      ret, fi_strerror(-ret));
-		goto out;
+		ep_arg->decrement_ref_cnt();
+		throw std::runtime_error("");
 	}
 
 	/* Pre-allocated buffers for data path */
 	ret = nccl_ofi_freelist_init(req_size, 16, 16, NCCL_OFI_MAX_SEND_REQUESTS,
-				     sendrecv_fl_req_entry_init, NULL,
-				     &ret_s_comm->nccl_ofi_reqs_fl);
+				     sendrecv_fl_req_entry_init, nullptr,
+				     &this->nccl_ofi_reqs_fl);
 	if (OFI_UNLIKELY(ret != 0)) {
 		NCCL_OFI_WARN("Could not allocate NCCL OFI requests free list for dev %d",
-			      device->dev_id);
-		goto out;
+			      this->dev_id);
+		ep_arg->decrement_ref_cnt();
+		throw std::runtime_error("");
 	}
 
-	*s_comm = ret_s_comm;
-out:
-	if (ret) {
-		/* Above code incremented the ep ref counter, so decrement it on
-		   failure */
-		ep->decrement_ref_cnt();
-		delete ret_s_comm;
-	}
-
-	return ret;
+	this->connector = cm_arg->connect(*handle, &conn_info, sizeof(conn_info));
 }
 
 /*
@@ -2030,12 +2004,7 @@ int nccl_net_ofi_sendrecv_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 
 	if (s_comm == nullptr) {
 		/* Build send_comm */
-		ret = sendrecv_send_comm_create(handle, this, &conn_info, &s_comm);
-		if (OFI_UNLIKELY(ret != 0 || s_comm == nullptr)) {
-			return ret;
-		}
-
-		s_comm->connector = domain_ptr->cm->connect(*handle, &conn_info, sizeof(conn_info));
+		s_comm = new nccl_net_ofi_sendrecv_send_comm_t(handle, this, domain_ptr->cm, &conn_info, device->dev_id);
 	}
 
 	/* Progress our engine to get completions */

@@ -757,6 +757,14 @@ enum nccl_net_ofi_comm_type_t {
  */
 class nccl_net_ofi_comm_t {
 public:
+	nccl_net_ofi_comm_t(nccl_net_ofi_comm_type_t type_arg,
+			    nccl_net_ofi_ep_t *ep_arg,
+			    int dev_id_arg)
+		: type(type_arg),
+		  ep(ep_arg),
+		  dev_id(dev_id_arg)	  
+	{}
+
 	virtual ~nccl_net_ofi_comm_t() = default;
 
 	enum nccl_net_ofi_comm_type_t type;
@@ -769,6 +777,12 @@ public:
  */
 class nccl_net_ofi_listen_comm_t : public nccl_net_ofi_comm_t {
 public:
+	nccl_net_ofi_listen_comm_t(nccl_net_ofi_comm_type_t type_arg,
+			    nccl_net_ofi_ep_t *ep_arg,
+			    int dev_id_arg)
+		: nccl_net_ofi_comm_t(type_arg, ep_arg, dev_id_arg)
+	{}
+
 	virtual ~nccl_net_ofi_listen_comm_t() = default;
 
 	virtual int accept(nccl_net_ofi_recv_comm_t **recv_comm) = 0;
@@ -779,6 +793,11 @@ public:
 class nccl_net_ofi_send_comm_t : public nccl_net_ofi_comm_t {
 public:
 	// TODO: Potentially store this here: int trafficClass;
+	nccl_net_ofi_send_comm_t(nccl_net_ofi_comm_type_t type_arg,
+			    	 nccl_net_ofi_ep_t *ep_arg,
+			    	 int dev_id_arg)
+		: nccl_net_ofi_comm_t(type_arg, ep_arg, dev_id_arg)
+	{}
 
 	virtual ~nccl_net_ofi_send_comm_t() = default;
 
@@ -814,6 +833,12 @@ public:
 
 class nccl_net_ofi_recv_comm_t : public nccl_net_ofi_comm_t {
 public:
+	nccl_net_ofi_recv_comm_t(nccl_net_ofi_comm_type_t type_arg,
+			 	 nccl_net_ofi_ep_t *ep_arg,
+			 	 int dev_id_arg)
+		: nccl_net_ofi_comm_t(type_arg, ep_arg, dev_id_arg)
+	{}
+
 	virtual ~nccl_net_ofi_recv_comm_t() = default;
 
 	/*

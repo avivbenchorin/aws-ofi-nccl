@@ -50,10 +50,18 @@ struct nccl_net_ofi_sendrecv_mr_handle_t : nccl_net_ofi_mr_handle_t {
 
 /* Forward declarations needed for sendrecv transport endpoint and comm types */
 class nccl_net_ofi_sendrecv_device_t;
+class nccl_net_ofi_sendrecv_domain_t;
 class nccl_net_ofi_sendrecv_ep_t;
 
 class nccl_net_ofi_sendrecv_listen_comm_t : public nccl_net_ofi_listen_comm_t {
 public:
+	/**
+	 * @brief 	Default constructor
+	 */
+	nccl_net_ofi_sendrecv_listen_comm_t(nccl_net_ofi_sendrecv_ep_t *ep_arg,
+					    nccl_ofi_connection_manager *cm_arg,
+					    int device_id);
+
 	/**
 	 * @brief Return SENDRECV listen communicator endpoint
 	 */
@@ -76,6 +84,14 @@ public:
 
 class nccl_net_ofi_sendrecv_send_comm_t : public nccl_net_ofi_send_comm_t {
 public:
+	/**
+	 * @brief 	Default constructor
+	 */
+	nccl_net_ofi_sendrecv_send_comm_t(nccl_net_ofi_conn_handle_t * handle, 
+					  nccl_net_ofi_sendrecv_ep_t *ep_arg,
+					  nccl_ofi_connection_manager *cm_arg,
+					  nccl_ofi_connection_info_t *conn_info,
+					  int dev_id_arg);
 	/**
 	 * @brief Return SENDRECV send communicator endpoint
 	 */
@@ -120,6 +136,12 @@ typedef struct nccl_net_ofi_sendrecv_flush_buffer {
 
 class nccl_net_ofi_sendrecv_recv_comm_t : public nccl_net_ofi_recv_comm_t {
 public:
+	
+nccl_net_ofi_sendrecv_recv_comm_t(nccl_net_ofi_sendrecv_listen_comm_t *l_comm,
+				  nccl_net_ofi_sendrecv_device_t *device_arg,
+				  nccl_net_ofi_sendrecv_domain_t *domain_arg,
+				  nccl_net_ofi_sendrecv_ep_t *ep_arg,
+				  nccl_ofi_cm_receiver *receiver_arg);
 	/**
 	 * @brief Return SENDRECV recv communicator endpoint
 	 */
