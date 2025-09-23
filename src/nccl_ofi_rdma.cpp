@@ -2509,6 +2509,11 @@ int nccl_net_ofi_rdma_domain_t::dereg_mr_on_device(nccl_net_ofi_rdma_mr_handle_t
 	return ret;
 }
 
+int nccl_net_ofi_rdma_domain_t::deregMr(nccl_net_ofi_comm_t *comm,
+					nccl_net_ofi_mr_handle_t *mr_handle)
+{
+	return this->dereg_mr(static_cast<nccl_net_ofi_rdma_mr_handle_t *>(mr_handle));
+}
 
 int nccl_net_ofi_rdma_domain_t::dereg_mr(nccl_net_ofi_rdma_mr_handle_t *mr_handle)
 {
@@ -2614,6 +2619,19 @@ error:
 	return ret;
 }
 
+int nccl_net_ofi_rdma_domain_t::regMr(nccl_net_ofi_comm_t *comm,
+				      nccl_ofi_mr_ckey_ref ckey,
+				      int type,
+				      void **mhandle)
+{
+	pthread_wrapper domain_scoped_lock(&this->domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(this, "regMr");
+
+	return this->reg_mr(ckey, type,
+			    reinterpret_cast<nccl_net_ofi_rdma_mr_handle_t **>(mhandle));
+}
+
 
 int nccl_net_ofi_rdma_domain_t::reg_mr(nccl_ofi_mr_ckey_ref ckey,
 				       int type,
@@ -2690,39 +2708,6 @@ int nccl_net_ofi_rdma_domain_t::reg_internal_mr_dma_buf(void *data,
 }
 #endif
 
-static int reg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
-			    nccl_ofi_mr_ckey_ref ckey,
-			    int type, void **mhandle)
-{
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)send_comm->base.ep;
-        nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	assert(domain != NULL);
-
-	pthread_wrapper domain_lock(&domain->domain_lock);
-
-	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_send_comm");
-
-	return domain->reg_mr(ckey,
-			      type,
-			      (nccl_net_ofi_rdma_mr_handle_t **)mhandle);
-}
-
-static int reg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
-			    nccl_ofi_mr_ckey_ref ckey,
-			    int type, void **mhandle)
-{
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)recv_comm->base.ep;
-	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	assert(domain != NULL);
-
-	pthread_wrapper domain_lock(&domain->domain_lock);
-
-	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_recv_comm");
-
-	return domain->reg_mr(ckey,
-			      type,
-			      (nccl_net_ofi_rdma_mr_handle_t **)mhandle);
-}
 
 typedef struct {
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle;
@@ -2783,19 +2768,6 @@ static int freelist_deregmr_host_fn(void *handle)
 	return 0;
 }
 
-static int dereg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
-						nccl_net_ofi_mr_handle_t *mhandle)
-{
-	/* Retrieve and validate endpoint */
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)recv_comm->base.ep;
-	assert(ep != NULL);
-
-	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	assert(domain != NULL);
-
-	nccl_net_ofi_rdma_mr_handle_t *mr_handle = (nccl_net_ofi_rdma_mr_handle_t *)mhandle;
-	return domain->dereg_mr(mr_handle);
-}
 
 /*
  * @brief	Assign an allocated rdma request buffer
@@ -4282,8 +4254,6 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 
 	r_comm->base.base.type = NCCL_NET_OFI_RECV_COMM;
 	r_comm->base.base.dev_id = dev_id;
-	r_comm->base.regMr = reg_mr_recv_comm;
-	r_comm->base.deregMr = dereg_mr_recv_comm;
 	r_comm->base.recv = recv;
 	r_comm->base.flush = flush;
 	r_comm->base.close = recv_close_deferred;
@@ -4888,20 +4858,6 @@ int nccl_net_ofi_rdma_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 	return ret;
 }
 
-static int dereg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
-				       nccl_net_ofi_mr_handle_t *mhandle)
-{
-	/* Retrieve and validate endpoint */
-	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)send_comm->base.ep;
-	assert(ep != NULL);
-
-	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	assert(domain != NULL);
-
-	nccl_net_ofi_rdma_mr_handle_t *mr_handle =
-		(nccl_net_ofi_rdma_mr_handle_t *)mhandle;
-	return domain->dereg_mr(mr_handle);
-}
 
 static int alloc_rdma_write_req(nccl_net_ofi_rdma_send_comm_t *s_comm,
 				nccl_net_ofi_rdma_ep_t *ep,
@@ -6031,8 +5987,6 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 	ret_s_comm->base.base.type = NCCL_NET_OFI_SEND_COMM;
 	ret_s_comm->base.base.ep = this;
 	ret_s_comm->base.base.dev_id = dev_id;
-	ret_s_comm->base.regMr = reg_mr_send_comm;
-	ret_s_comm->base.deregMr = dereg_mr_send_comm;
 	ret_s_comm->base.send = send;
 	ret_s_comm->base.close = send_close_deferred;
 	ret_s_comm->base.write = rma_write;
