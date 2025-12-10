@@ -5825,9 +5825,10 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 			goto error;
 		}
 	}
-#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
-	g_plugin->isend_total->start_timer();
-#endif
+// Dec 09 commented out initial measurement which obtained 270ns.
+//#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
+//	g_plugin->isend_total->start_timer();
+//#endif
 	/* Return request to NCCL */
 	*base_req = req;
 	/* Increment next_msg_seq_num for next call */
@@ -5840,7 +5841,9 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 		req->free(false);
 	*base_req = NULL;
  exit:
-	//g_plugin->isend_libf->stop_timer();
+#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
+	g_plugin->isend_total->start_timer();	// Dec 09 try to narrow down 270ns
+#endif
 	return ret;
 }
 
@@ -7247,7 +7250,7 @@ nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 
 	if (this->isend_total) {
 		NCCL_OFI_WARN("NCCLOFI-1149 profile type: 0x%x, 0x%x, 0x%x", PROF_ISEND, PROF_IRECV, PROF_TEST);
-#if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG))
+#if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG | PROF_MUTEX))
 		print_and_free_histogram(&this->isend_total);
 #endif
 #if(PROF_ISEND & (PROF_PENDING_CQ | PROF_REQ_PREP))
