@@ -148,7 +148,7 @@ static ssize_t flush_sentinel_size;
 static bool early_completion = false;
 
 /* Function prototypes */
-static int send_progress(nccl_net_ofi_rdma_req_t *req);
+static int send_progress(nccl_net_ofi_rdma_req_t *req, bool *is_fi_write = nullptr);
 
 static int receive_progress(nccl_net_ofi_rdma_req_t *req, bool add_to_pending);
 
@@ -5326,7 +5326,7 @@ static int post_rx_buffer(nccl_net_ofi_rdma_req_t *req,
  * 		-FI_EAGAIN, if need to retry the xfer
  * 		-1, error
  */
-static int send_progress(nccl_net_ofi_rdma_req_t *req)
+static int send_progress(nccl_net_ofi_rdma_req_t *req, bool *is_fi_write)
 {
 	ssize_t ret = 0;;
 	nccl_net_ofi_rdma_send_comm_t *s_comm = (nccl_net_ofi_rdma_send_comm_t *)req->comm;
@@ -5373,6 +5373,9 @@ static int send_progress(nccl_net_ofi_rdma_req_t *req)
 					break;
 			}
 			//g_plugin->isend_libf->pause_timer();
+			if (is_fi_write != nullptr) {
+				*is_fi_write = true;
+			}
 		}
 	} else if (req->type == NCCL_OFI_RDMA_WRITE) { // Post RMA write
 		ret = post_rma_write(req);
@@ -5742,7 +5745,8 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 	assert(domain != NULL);
 
 #if(PROF_ISEND & PROF_MUTEX)
-	pthread_wrapper_prof eplock(ENDPOINT_LOCK(ep), g_plugin->isend_total);
+	pthread_wrapper_prof eplock(ENDPOINT_LOCK(ep), g_plugin->isend_mutex_unlock_non_send_progress);
+	eplock.set_time_unlocks(true);
 #else
 	pthread_wrapper eplock(ENDPOINT_LOCK(ep));
 #endif
@@ -5848,7 +5852,8 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 #if(PROF_ISEND & PROF_SEND_RECV_PROG)
 		g_plugin->isend_libf_send_prog->start_timer();
 #endif
-		ret = send_progress(req);
+		bool is_fi_write = false;
+		ret = send_progress(req, &is_fi_write);
 #if(PROF_ISEND & PROF_SEND_RECV_PROG)
 		g_plugin->isend_libf_send_prog->stop_timer();
 #endif
@@ -5863,6 +5868,11 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 			/* TODO: Remove req from message buffer */
 			ret = -ENOTSUP;
 			goto error;
+		}
+		if (is_fi_write) {
+			eplock.set_timer(g_plugin->isend_mutex_unlock_send_progress_fi_write);
+		} else {
+			eplock.set_timer(g_plugin->isend_mutex_unlock_send_progress_non_fi_write);
 		}
 	}
 // Dec 09 commented out initial measurement which obtained 270ns.
@@ -7314,7 +7324,11 @@ nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 	if (this->isend_total) {
 		NCCL_OFI_WARN("NCCLOFI-1149 profile type: 0x%x, 0x%x, 0x%x", PROF_ISEND, PROF_IRECV, PROF_TEST);
 #if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG | PROF_MUTEX))
-		print_and_free_histogram(&this->isend_total);
+		// print_and_free_histogram(&this->isend_total);
+		// print_and_free_histogram(&this->isend_mutex_unlock_total);
+		print_and_free_histogram(&this->isend_mutex_unlock_send_progress_non_fi_write);
+		print_and_free_histogram(&this->isend_mutex_unlock_send_progress_fi_write);
+		print_and_free_histogram(&this->isend_mutex_unlock_non_send_progress);
 #endif
 #if(PROF_ISEND & (PROF_PENDING_CQ | PROF_REQ_PREP))
 		print_and_free_histogram(&this->isend_libf_pending_cq);

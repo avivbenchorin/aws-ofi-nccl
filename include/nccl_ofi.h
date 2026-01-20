@@ -1021,6 +1021,10 @@ public:
 	 * Histrograms to profile isend(), irecv(), and test().
 	 */
 	timer_histogram<histogram_custom_binner<size_t> > *isend_total;
+	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_total;
+	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_send_progress_non_fi_write;
+	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_send_progress_fi_write;
+	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_non_send_progress;
 	timer_histogram<histogram_custom_binner<size_t> > *isend_libf_pending_cq;
 	timer_histogram<histogram_custom_binner<size_t> > *isend_libf_send_prog;
 	timer_histogram<histogram_custom_binner<size_t> > *irecv_total;

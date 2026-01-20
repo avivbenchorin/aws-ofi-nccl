@@ -147,14 +147,18 @@ private:
 static inline void
 nccl_net_ofi_mutex_unlock_impl_prof(pthread_mutex_t *mutex,
 				    timer_histogram<histogram_custom_binner<size_t> > *timer,
-				    const char *file, size_t line)
+				    bool time_unlocks, const char *file, size_t line)
 {
 #if(PROF_ISEND & PROF_MUTEX)
-	timer->start_timer();   // Dec 09 narrow down 270ns
+	if (time_unlocks) {
+		timer->start_timer();   // Dec 09 narrow down 270ns
+	}
 #endif
 	int ret = pthread_mutex_unlock(mutex);
 #if(PROF_ISEND & PROF_MUTEX)
-	timer->stop_timer();   // Dec 09 narrow down 270ns
+	if (time_unlocks) {
+		timer->stop_timer();   // Dec 09 narrow down 270ns
+	}
 #endif
 	if (OFI_UNLIKELY(ret != 0)) {
 		(*ofi_log_function)(NCCL_LOG_WARN, NCCL_ALL, file, line,
@@ -163,14 +167,14 @@ nccl_net_ofi_mutex_unlock_impl_prof(pthread_mutex_t *mutex,
 		abort();
 	}
 }
-#define nccl_net_ofi_mutex_unlock_prof(mutex, timer) nccl_net_ofi_mutex_unlock_impl_prof(mutex, timer, __FILE__, __LINE__);
+#define nccl_net_ofi_mutex_unlock_prof(mutex, timer, time_unlocks) nccl_net_ofi_mutex_unlock_impl_prof(mutex, timer, time_unlocks, __FILE__, __LINE__);
 
 class pthread_wrapper_prof {
 public:
 	/**
 	 * Constructor. Take ownership of the mutex and lock it.
 	 */
-	pthread_wrapper_prof(pthread_mutex_t *_mutex, timer_histogram<histogram_custom_binner<size_t> > *_timer) : mutex(_mutex), timer(_timer)
+	pthread_wrapper_prof(pthread_mutex_t *_mutex, timer_histogram<histogram_custom_binner<size_t> > *_timer, bool _time_unlocks = false) : mutex(_mutex), timer(_timer), time_unlocks(_time_unlocks)
 	{
 		nccl_net_ofi_mutex_lock(mutex);
 	}
@@ -186,18 +190,28 @@ public:
 		mutex = nullptr;
 	}
 
+	void set_time_unlocks(bool value)
+	{
+		time_unlocks = value;
+	}
+
+	void set_timer(timer_histogram<histogram_custom_binner<size_t> > *_timer) {
+		timer = _timer;
+	}
+
 	/**
 	 * Destructor. Unlock the owned mutex.
 	 */
 	~pthread_wrapper_prof()
 	{
 		if (mutex) {
-			nccl_net_ofi_mutex_unlock_prof(mutex, timer);
+			nccl_net_ofi_mutex_unlock_prof(mutex, timer, time_unlocks);
 		}
 	}
 private:
 	pthread_mutex_t *mutex;
 	timer_histogram<histogram_custom_binner<size_t> > *timer;
+	bool time_unlocks;
 };
 
 #endif // End NCCL_OFI_PTHREAD_H
