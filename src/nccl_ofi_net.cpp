@@ -370,13 +370,13 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 #else
 	plugin->isend_total = new timer_histogram<histogram_custom_binner<size_t> >("isend() total duration", histogram_custom_binner<size_t>(total_bins), ovh_30);
 
-	plugin->isend_mutex_unlock_total = new timer_histogram<histogram_custom_binner<size_t> >("isend(), mutex unlock total", histogram_custom_binner<size_t>(total_bins), ovh_30);
+	plugin->isend_mutex_unlock_total = new mutex_timer_histogram("isend(), mutex unlock total", histogram_custom_binner<size_t>(total_bins), ovh_30);
 
-	plugin->isend_mutex_unlock_send_progress_non_fi_write = new timer_histogram<histogram_custom_binner<size_t> >("isend(), mutex unlock total when reaching send_progress for non fi_writes", histogram_custom_binner<size_t>(total_bins), ovh_30);
+	plugin->isend_mutex_unlock_send_progress_non_fi_write = new mutex_timer_histogram("isend(), mutex unlock total when reaching send_progress for non fi_writes", histogram_custom_binner<size_t>(total_bins), ovh_30);
 
-	plugin->isend_mutex_unlock_send_progress_fi_write = new timer_histogram<histogram_custom_binner<size_t> >("isend(), mutex unlock total when reaching send_progress for fi_writes", histogram_custom_binner<size_t>(total_bins), ovh_30);
+	plugin->isend_mutex_unlock_send_progress_fi_write = new mutex_timer_histogram("isend(), mutex unlock total when reaching send_progress for fi_writes", histogram_custom_binner<size_t>(total_bins), ovh_30);
 
-	plugin->isend_mutex_unlock_non_send_progress = new timer_histogram<histogram_custom_binner<size_t> >("isend(), mutex unlock total when not reaching send_progress", histogram_custom_binner<size_t>(total_bins), ovh_30);
+	plugin->isend_mutex_unlock_non_send_progress = new mutex_timer_histogram("isend(), mutex unlock total when not reaching send_progress", histogram_custom_binner<size_t>(total_bins), ovh_30);
 #endif
 #if(PROF_IRECV & PROF_TOTAL)
 	plugin->irecv_total = new timer_histogram<histogram_custom_binner<size_t> >("irecv() Total Duration", histogram_custom_binner<size_t>(total_bins), ovh_30);

@@ -15,6 +15,7 @@
 #include <rdma/fi_rma.h>
 #include <nccl/net.h>
 #include <stats/histogram.h>
+#include "nccl_ofi_pthread.h"
 
 #include "gin/nccl_ofi_gin_types.h"
 #include "nccl_ofi_log.h"
@@ -1021,10 +1022,10 @@ public:
 	 * Histrograms to profile isend(), irecv(), and test().
 	 */
 	timer_histogram<histogram_custom_binner<size_t> > *isend_total;
-	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_total;
-	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_send_progress_non_fi_write;
-	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_send_progress_fi_write;
-	timer_histogram<histogram_custom_binner<size_t> > *isend_mutex_unlock_non_send_progress;
+	mutex_timer_histogram *isend_mutex_unlock_total;
+	mutex_timer_histogram *isend_mutex_unlock_send_progress_non_fi_write;
+	mutex_timer_histogram *isend_mutex_unlock_send_progress_fi_write;
+	mutex_timer_histogram *isend_mutex_unlock_non_send_progress;
 	timer_histogram<histogram_custom_binner<size_t> > *isend_libf_pending_cq;
 	timer_histogram<histogram_custom_binner<size_t> > *isend_libf_send_prog;
 	timer_histogram<histogram_custom_binner<size_t> > *irecv_total;

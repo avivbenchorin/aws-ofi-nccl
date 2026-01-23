@@ -7297,7 +7297,8 @@ static void get_hints(struct fi_info *hints)
 	hints->domain_attr->cq_data_size = 4;
 }
 
-static void print_and_free_histogram(timer_histogram<histogram_custom_binner<size_t> > **hist)
+template<typename HistogramType>
+static void print_and_free_histogram(HistogramType **hist)
 {
 	(*hist)->print_stats();
 	delete (*hist);

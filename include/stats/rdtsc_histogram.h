@@ -62,23 +62,48 @@ public:
 	using histogram<T, Binner>::insert;
 
 	/**
-	 * @brief Constructor
+	 * @brief Constructor with cycle-based overhead
 	 *
 	 * Creates a new RDTSC timer histogram with the specified description,
-	 * binner, and optional overhead value.
+	 * binner, and optional overhead value in CPU cycles.
 	 *
 	 * @param description_arg Human-readable description for logging
 	 * @param binner_arg Binner instance defining histogram bins
 	 * @param overhead_cycles Optional overhead to subtract (in CPU cycles)
 	 *
 	 * @note The overhead parameter is in CPU cycles, not nanoseconds. This
-	 *       allows more accurate overhead subtraction. Use
-	 *       rdtsc_clock::to_cycles() to convert nanoseconds to cycles.
+	 *       allows more accurate overhead subtraction.
 	 */
 	rdtsc_timer_histogram(const std::string &description_arg, 
 	                      Binner binner_arg, 
 	                      T overhead_cycles = 0)
 		: histogram<T, Binner>(description_arg, binner_arg, overhead_cycles),
+		  start_cycles_(0)
+	{
+	}
+
+	/**
+	 * @brief Constructor with nanosecond-based overhead (for compatibility)
+	 *
+	 * Creates a new RDTSC timer histogram with the specified description,
+	 * binner, and optional overhead value in nanoseconds. The nanosecond
+	 * overhead is automatically converted to CPU cycles using calibration.
+	 *
+	 * @param description_arg Human-readable description for logging
+	 * @param binner_arg Binner instance defining histogram bins
+	 * @param overhead_ns Overhead to subtract (in nanoseconds)
+	 *
+	 * @note This constructor provides compatibility with the chrono-based
+	 *       timer_histogram API. The nanosecond value is converted to cycles
+	 *       for more accurate overhead subtraction.
+	 */
+	template<typename Rep, typename Period>
+	rdtsc_timer_histogram(const std::string &description_arg, 
+	                      Binner binner_arg, 
+	                      const std::chrono::duration<Rep, Period> &overhead_ns)
+		: histogram<T, Binner>(description_arg, binner_arg, 
+		                       static_cast<T>(nccl_ofi_rdtsc::rdtsc_clock::to_cycles(
+		                           std::chrono::duration_cast<std::chrono::nanoseconds>(overhead_ns).count()))),
 		  start_cycles_(0)
 	{
 	}
