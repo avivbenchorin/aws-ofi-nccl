@@ -57,3 +57,14 @@ noinst_HEADERS = \
 	tuner/nccl_ofi_tuner_process_config.h \
 	tuner/nccl_ofi_tuner_region.h \
 	tuner/nccl_ofi_tuner_model.h
+
+if ENABLE_RDTSC
+noinst_HEADERS += \
+	stats/rdtsc_platform.h \
+	stats/rdtsc_x86_64.h \
+	stats/rdtsc_arm64.h \
+	stats/rdtsc_generic.h \
+	stats/rdtsc_calibration.h \
+	stats/rdtsc_clock.h \
+	stats/rdtsc_histogram.h
+endif

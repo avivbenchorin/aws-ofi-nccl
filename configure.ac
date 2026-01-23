@@ -179,6 +179,9 @@ AS_IF([test "${valgrind_enabled}" = "1" -a "${enable_asan}" = "yes"],
 
 CHECK_ENABLE_MEMFD_CREATE()
 
+# Check for RDTSC timing support
+CHECK_RDTSC()
+
 # do we want our tests?
 CHECK_PKG_MPI([found_mpi="yes"], [found_mpi="no"])
 
@@ -313,4 +316,10 @@ echo "*"
 echo "* AWS OFI NCCL plugin has been configured."
 echo "*"
 echo "* Enabled Platforms: ${ENABLED_PLATFORMS}"
+echo "*"
+AS_IF([test "x${rdtsc_enabled}" = "xyes"], [
+echo "* RDTSC Timing: enabled (${rdtsc_arch})"
+], [
+echo "* RDTSC Timing: disabled (using std::chrono)"
+])
 echo "*"

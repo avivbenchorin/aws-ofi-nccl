@@ -41,6 +41,10 @@ if WANT_PLATFORM_AWS
 sources += platform-aws.cpp
 endif
 
+if ENABLE_RDTSC
+sources += stats/rdtsc_calibration.cpp
+endif
+
 if ENABLE_NEURON
 sources += nccl_ofi_interface_neuron.cpp
 endif
