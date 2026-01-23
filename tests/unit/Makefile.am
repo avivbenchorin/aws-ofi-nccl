@@ -28,6 +28,10 @@ noinst_PROGRAMS = \
 	param \
 	platform_manager
 
+if ENABLE_RDTSC_TIMING
+noinst_PROGRAMS += rdtsc_overhead rdtsc_example
+endif
+
 if WANT_PLATFORM_AWS
 noinst_PROGRAMS += aws_platform_mapper
 endif
@@ -58,6 +62,11 @@ histogram_SOURCES = histogram.cpp
 dlopen_c_test_SOURCES = dlopen_c_test.c
 param_SOURCES = param.cpp
 platform_manager_SOURCES = platform_manager.cpp
+
+if ENABLE_RDTSC_TIMING
+rdtsc_overhead_SOURCES = rdtsc_overhead.cpp
+rdtsc_example_SOURCES = rdtsc_example.cpp
+endif
 
 TESTS = $(noinst_PROGRAMS)
 endif

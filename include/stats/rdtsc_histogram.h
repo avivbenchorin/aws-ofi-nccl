@@ -5,6 +5,7 @@
 #ifndef NCCL_OFI_STATS_RDTSC_HISTOGRAM_H
 #define NCCL_OFI_STATS_RDTSC_HISTOGRAM_H
 
+#include <cstdint>
 #include "histogram.h"
 #include "rdtsc_clock.h"
 #include "rdtsc_platform.h"
@@ -162,6 +163,88 @@ public:
 		insert(static_cast<T>(elapsed_ns));
 		
 		return static_cast<rep>(elapsed_ns);
+	}
+
+	/**
+	 * @brief Measure RDTSC timing overhead
+	 *
+	 * Measures the overhead of the RDTSC timing mechanism itself by performing
+	 * back-to-back start_timer() and stop_timer() calls with no operation in
+	 * between. This overhead can then be subtracted from actual measurements
+	 * for more accurate profiling.
+	 *
+	 * The measurement is performed multiple times and the minimum value is
+	 * returned, as this represents the best-case scenario with minimal
+	 * interference from interrupts or context switches.
+	 *
+	 * @param iterations Number of measurements to perform (default: 1000)
+	 * @return Minimum measured overhead in CPU cycles
+	 *
+	 * @note The returned value is in CPU cycles, not nanoseconds. This allows
+	 *       for more accurate overhead subtraction in the cycle domain.
+	 *
+	 * Usage example:
+	 *   uint64_t overhead_cycles = rdtsc_timer_histogram<...>::measure_overhead();
+	 *   uint64_t overhead_ns = rdtsc_clock::to_nanoseconds(overhead_cycles);
+	 *   printf("RDTSC overhead: %lu cycles (~%lu ns)\n", overhead_cycles, overhead_ns);
+	 *   
+	 *   // Create histogram with overhead subtraction
+	 *   rdtsc_timer_histogram<...> hist("operation", binner, overhead_cycles);
+	 */
+	static uint64_t measure_overhead(size_t iterations = 1000) {
+		uint64_t min_overhead = UINT64_MAX;
+		
+		// Warm up the cache and CPU branch predictor
+		for (size_t i = 0; i < 100; ++i) {
+			asm volatile("" : : : "memory");
+			uint64_t start = nccl_ofi_rdtsc::rdtsc();
+			asm volatile("" : : : "memory");
+			asm volatile("" : : : "memory");
+			uint64_t end = nccl_ofi_rdtsc::rdtscp();
+			asm volatile("" : : : "memory");
+			(void)start;
+			(void)end;
+		}
+		
+		// Measure overhead multiple times and take minimum
+		for (size_t i = 0; i < iterations; ++i) {
+			// Replicate the exact sequence used in start_timer() and stop_timer()
+			asm volatile("" : : : "memory");  // Compiler barrier
+			uint64_t start = nccl_ofi_rdtsc::rdtsc();
+			asm volatile("" : : : "memory");  // Compiler barrier
+			
+			// Immediately stop timing (no operation in between)
+			asm volatile("" : : : "memory");  // Compiler barrier
+			uint64_t end = nccl_ofi_rdtsc::rdtscp();
+			asm volatile("" : : : "memory");  // Compiler barrier
+			
+			uint64_t overhead = end - start;
+			
+			// Take minimum to avoid interference from interrupts
+			if (overhead < min_overhead) {
+				min_overhead = overhead;
+			}
+		}
+		
+		return min_overhead;
+	}
+
+	/**
+	 * @brief Measure RDTSC timing overhead in nanoseconds
+	 *
+	 * Convenience wrapper around measure_overhead() that returns the result
+	 * in nanoseconds instead of CPU cycles.
+	 *
+	 * @param iterations Number of measurements to perform (default: 1000)
+	 * @return Minimum measured overhead in nanoseconds
+	 *
+	 * Usage example:
+	 *   uint64_t overhead_ns = rdtsc_timer_histogram<...>::measure_overhead_ns();
+	 *   printf("RDTSC overhead: ~%lu ns\n", overhead_ns);
+	 */
+	static uint64_t measure_overhead_ns(size_t iterations = 1000) {
+		uint64_t overhead_cycles = measure_overhead(iterations);
+		return nccl_ofi_rdtsc::rdtsc_clock::to_nanoseconds(overhead_cycles);
 	}
 
 private:
