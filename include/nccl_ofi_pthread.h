@@ -143,10 +143,22 @@ private:
 };
 
 #include "stats/histogram.h"
+
+// Conditional RDTSC support
+#if defined(ENABLE_RDTSC_TIMING)
+	#include "stats/rdtsc_histogram.h"
+	#include "stats/rdtsc_platform.h"
+	// Use RDTSC-based timer histogram for low overhead
+	using mutex_timer_histogram = rdtsc_timer_histogram<histogram_custom_binner<size_t>>;
+#else
+	// Use standard chrono-based timer histogram
+	using mutex_timer_histogram = timer_histogram<histogram_custom_binner<size_t>>;
+#endif
+
 /* A copy of nccl_net_ofi_mutex_unlock_impl() for profiling only */
 static inline void
 nccl_net_ofi_mutex_unlock_impl_prof(pthread_mutex_t *mutex,
-				    timer_histogram<histogram_custom_binner<size_t> > *timer,
+				    mutex_timer_histogram *timer,
 				    bool time_unlocks, const char *file, size_t line)
 {
 #if(PROF_ISEND & PROF_MUTEX)
@@ -174,7 +186,7 @@ public:
 	/**
 	 * Constructor. Take ownership of the mutex and lock it.
 	 */
-	pthread_wrapper_prof(pthread_mutex_t *_mutex, timer_histogram<histogram_custom_binner<size_t> > *_timer, bool _time_unlocks = false) : mutex(_mutex), timer(_timer), time_unlocks(_time_unlocks)
+	pthread_wrapper_prof(pthread_mutex_t *_mutex, mutex_timer_histogram *_timer, bool _time_unlocks = false) : mutex(_mutex), timer(_timer), time_unlocks(_time_unlocks)
 	{
 		nccl_net_ofi_mutex_lock(mutex);
 	}
@@ -195,7 +207,7 @@ public:
 		time_unlocks = value;
 	}
 
-	void set_timer(timer_histogram<histogram_custom_binner<size_t> > *_timer) {
+	void set_timer(mutex_timer_histogram *_timer) {
 		timer = _timer;
 	}
 
@@ -210,7 +222,7 @@ public:
 	}
 private:
 	pthread_mutex_t *mutex;
-	timer_histogram<histogram_custom_binner<size_t> > *timer;
+	mutex_timer_histogram *timer;
 	bool time_unlocks;
 };
 
