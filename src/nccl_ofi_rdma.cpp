@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023=2024 Amazon.com, Inc. or its affiliates. All rights reserved.
+ * Copyright (c) 2023-2026 Amazon.com, Inc. or its affiliates. All rights reserved.
  */
 #include "config.h"
 
@@ -4706,7 +4706,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 		l_comm->stage = COMM_CONN_REQ_PENDING;
 
-		fallthrough;
+		nccl_ofi_fallthrough;
 	case COMM_CONN_REQ_PENDING:
 		/* COMM_CONN_REQ_PENDING: Wait until connect message has been
 		 * received. Then, prepare for sending connect accept message,
@@ -4728,7 +4728,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 		l_comm->stage = COMM_CONN_RESP_REQ_PENDING;
 
-		fallthrough;
+		nccl_ofi_fallthrough;
 	case COMM_CONN_RESP_REQ_PENDING:
 		/* COMM_CONN_RESP_REQ_PENDING: Wait until connect
 		 * response message has been delivered. Afterwards,
