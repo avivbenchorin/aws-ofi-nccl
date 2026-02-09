@@ -191,6 +191,77 @@ jobs:
           path: config.log
           if-no-files-found: ignore
 
+  thread-safety-check:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        cc-variant:
+          - latest
+        cc:
+          - clang
+        tracing:
+          - none
+        sdk:
+          - cuda
+          - neuron
+        include:
+          - cc-variant: latest
+            cc: clang
+            cc-version: 18
+
+    name: u2204/${{ matrix.sdk }}/Thread Safety Analysis
+    container: ghcr.io/${{ github.repository }}/aws-ofi-nccl-ubuntu:${{ matrix.sdk }}-${{ matrix.cc }}-${{ matrix.cc-variant }}-${{ matrix.tracing }}-efalattest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fix Git Configuration
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build Plugin
+        run: |
+          set -x
+          export CC="clang"
+          export CXX="clang++"
+          export CXXFLAGS="-stdlib=libc++"
+          ./autogen.sh
+          if [ "${{ matrix.sdk }}" = "neuron" ]
+          then
+            ./configure --with-mpi=/opt/amazon/openmpi \
+                        --with-libfabric=/opt/amazon/efa \
+                        --enable-tests=yes \
+                        --enable-werror=yes \
+                        --enable-picky-compiler=yes \
+                        --enable-platform-aws \
+                        --enable-thread-analysis \
+                        --enable-neuron
+          else
+            ./configure --with-mpi=/opt/amazon/openmpi \
+                        --with-libfabric=/opt/amazon/efa \
+                        --enable-tests=yes \
+                        --enable-werror=yes \
+                        --enable-picky-compiler=yes \
+                        --enable-platform-aws \
+                        --enable-thread-analysis \
+                        --with-cuda=/usr/local/cuda/
+          fi
+
+      - name: Call `make`
+        run: make V=1
+
+      - name: Call `make check`
+        run: make check V=1 || (cat tests/unit/test-suite.log && exit 1)
+
+      - name: Call `make install`
+        run: sudo make install V=1
+
+      - name: Upload config.log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.cc }}-${{ matrix.cc-variant }}-${{ matrix.sdk }}-tsa-config.log
+          path: config.log
+          if-no-files-found: ignore
+
   codechecker:
     runs-on: ubuntu-22.04
     needs: [distcheck]
