@@ -11,7 +11,7 @@
 // A BasicLockable spinlock without many features
 class CAPABILITY("mutex") nccl_ofi_spinlock {
 public	:
-	nccl_ofi_spinlock() : val(UNLOCKED)
+	nccl_ofi_spinlock() : val(UNLOCKED), timer(nullptr)
 	{
 		std::atomic_thread_fence(std::memory_order_release);
 	}
@@ -43,15 +43,38 @@ public	:
 
 	void unlock() ACQUIRE()
 	{
+#if(PROF_ISEND & PROF_MUTEX)
+		if (timer && time_unlocks) {
+			timer->start_timer();   // Dec 09 narrow down 270ns
+		}
+#endif
 		val.store(UNLOCKED, std::memory_order_release);
+#if(PROF_ISEND & PROF_MUTEX)
+		if (timer && time_unlocks) {
+			timer->stop_timer();   // Dec 09 narrow down 270ns
+			time_unlocks = false;
+			timer = nullptr;
+		}
+#endif
+
 	}
 
+	void set_time_unlocks(bool value)
+	{
+		time_unlocks = value;
+	}
+
+	void set_timer(timer_histogram<histogram_custom_binner<size_t> > *_timer) {
+		timer = _timer;
+	}
 
 private:
 	using lock_type = std::atomic<int>;
 	enum state { UNLOCKED = 0, LOCKED = 1};
 
 	lock_type val;
+	timer_histogram<histogram_custom_binner<size_t> > *timer;
+	bool time_unlocks;
 };
 
 #endif
