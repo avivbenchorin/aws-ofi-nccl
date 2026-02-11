@@ -153,7 +153,7 @@ static ssize_t flush_sentinel_size;
 static bool early_completion = false;
 
 /* Function prototypes */
-static int send_progress(nccl_net_ofi_rdma_req *req);
+static int send_progress(nccl_net_ofi_rdma_req *req, bool *is_fi_write = nullptr);
 
 static int receive_progress(nccl_net_ofi_rdma_req *req, bool add_to_pending);
 
@@ -5274,7 +5274,7 @@ static int post_rx_buffer(nccl_net_ofi_rdma_req *req,
  * 		-FI_EAGAIN, if need to retry the xfer
  * 		-1, error
  */
-static int send_progress(nccl_net_ofi_rdma_req *req)
+static int send_progress(nccl_net_ofi_rdma_req *req, bool *is_fi_write)
 {
 	ssize_t ret = 0;;
 	nccl_net_ofi_rdma_send_comm_t *s_comm = (nccl_net_ofi_rdma_send_comm_t *)req->comm;
@@ -5321,6 +5321,9 @@ static int send_progress(nccl_net_ofi_rdma_req *req)
 					break;
 			}
 			//g_plugin->isend_libf->pause_timer();
+			if (is_fi_write != nullptr) {
+				*is_fi_write = true;
+			}
 		}
 	} else if (req->type == NCCL_OFI_RDMA_WRITE) { // Post RMA write
 		ret = post_rma_write(req);
@@ -5689,6 +5692,11 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 	domain = ep->rdma_endpoint_get_domain();
 	assert(domain != NULL);
 
+	nccl_ofi_spinlock &perf_lock = ENDPOINT_LOCK(ep);
+#if(PROF_ISEND & PROF_MUTEX)
+	perf_lock.set_timer(g_plugin->isend_mutex_unlock_non_send_progress);
+	perf_lock.set_time_unlocks(true);
+#endif
 	std::lock_guard eplock(ENDPOINT_LOCK(ep));
 
 	CHECK_ENDPOINT_ACTIVE(ep, "send");
@@ -5792,7 +5800,8 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 #if(PROF_ISEND & PROF_SEND_RECV_PROG)
 		g_plugin->isend_libf_send_prog->start_timer();
 #endif
-		ret = send_progress(req);
+		bool is_fi_write = false;
+		ret = send_progress(req, &is_fi_write);
 #if(PROF_ISEND & PROF_SEND_RECV_PROG)
 		g_plugin->isend_libf_send_prog->stop_timer();
 #endif
@@ -5808,10 +5817,16 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 			ret = -ENOTSUP;
 			goto error;
 		}
+		if (is_fi_write) {
+			perf_lock.set_timer(g_plugin->isend_mutex_unlock_send_progress_fi_write);
+		} else {
+			perf_lock.set_timer(g_plugin->isend_mutex_unlock_send_progress_non_fi_write);
+		}
 	}
-#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
-	g_plugin->isend_total->start_timer();
-#endif
+// Dec 09 commented out initial measurement which obtained 270ns.
+//#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
+//	g_plugin->isend_total->start_timer();
+//#endif
 	/* Return request to NCCL */
 	*base_req = req;
 	/* Increment next_msg_seq_num for next call */
@@ -5824,7 +5839,9 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 		req->free(req, false);
 	*base_req = NULL;
  exit:
-	//g_plugin->isend_libf->stop_timer();
+#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
+	g_plugin->isend_total->start_timer();	// Dec 09 try to narrow down 270ns
+#endif
 	return ret;
 }
 
@@ -7231,8 +7248,12 @@ nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 
 	if (this->isend_total) {
 		NCCL_OFI_WARN("NCCLOFI-1149 profile type: 0x%x, 0x%x, 0x%x", PROF_ISEND, PROF_IRECV, PROF_TEST);
-#if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG))
-		print_and_free_histogram(&this->isend_total);
+#if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG | PROF_MUTEX))
+		// print_and_free_histogram(&this->isend_total);
+		// print_and_free_histogram(&this->isend_mutex_unlock_total);
+		print_and_free_histogram(&this->isend_mutex_unlock_send_progress_non_fi_write);
+		print_and_free_histogram(&this->isend_mutex_unlock_send_progress_fi_write);
+		print_and_free_histogram(&this->isend_mutex_unlock_non_send_progress);
 #endif
 #if(PROF_ISEND & (PROF_PENDING_CQ | PROF_REQ_PREP))
 		print_and_free_histogram(&this->isend_libf_pending_cq);

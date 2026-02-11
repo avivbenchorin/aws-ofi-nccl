@@ -40,6 +40,7 @@ nccl_net_ofi_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)
 	const pthread_mutexattr_t *passed_attr;
 
 	int want_errorcheck = ofi_nccl_errorcheck_mutex();
+	want_errorcheck = false;
 
 	ret = pthread_once(&errorcheck_once, errorcheck_init);
 	if (ret != 0) {
@@ -49,6 +50,7 @@ nccl_net_ofi_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)
 
 	if (attr != NULL || want_errorcheck == 0) {
 		passed_attr = attr;
+		// NCCL_OFI_WARN("Using default on mutex");
 	} else {
 		NCCL_OFI_TRACE(NCCL_NET, "Enabling error checking on mutex");
 		passed_attr = &errorcheck_attr;
