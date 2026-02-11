@@ -133,6 +133,7 @@ static inline decltype(nccl_net_ofi_rdma_ep_t::ep_lock)& ENDPOINT_LOCK(nccl_net_
 
 
 /** Global variables **/
+nccl_net_ofi_plugin_t *g_plugin = nullptr;
 
 /* List of comms undergoing deferred cleanup */
 static std::deque<nccl_net_ofi_rdma_send_comm*> *s_comm_cleanup_list = NULL;
@@ -1718,6 +1719,98 @@ int nccl_net_ofi_rdma_ep_t::ofi_process_cq()
 	return ret;
 }
 
+// Same as ofi_process_cq_rail but for test only.
+static int ofi_process_cq_rail_test(nccl_net_ofi_rdma_device_t *device, nccl_net_ofi_rdma_cq_rail_t *rail)
+{
+	struct fi_cq_data_entry cqe_buffers[cq_read_count];
+	ssize_t rc = 0;
+	int ret = 0;
+
+	while (true) {
+#if(PROF_TEST & PROF_TEST_FI_CQ_READ)
+		g_plugin->test_libf->start_timer();
+#endif
+		/* Receive completions for the given endpoint */
+		rc = fi_cq_read(rail->cq.get(), cqe_buffers, cq_read_count);
+#if(PROF_TEST & PROF_TEST_FI_CQ_READ)
+		g_plugin->test_libf->stop_timer();
+#endif
+		if (rc > 0) {
+			ret = rdma_process_completions(cqe_buffers, rc, device, rail->rail_id);
+			if (OFI_UNLIKELY(ret != 0))
+				goto exit;
+		} else if (OFI_UNLIKELY(rc == -FI_EAVAIL)) {
+			/*
+			 * On call to fi_cq_readerr, Libfabric requires some members of
+			 * err_entry to be zero-initialized or point to valid data.  For
+			 * simplicity, just zero out the whole struct.
+			 */
+			struct fi_cq_err_entry err_entry = { };
+
+			ret = fi_cq_readerr(rail->cq.get(), &err_entry, 0);
+			if (OFI_UNLIKELY(ret == -FI_EAGAIN)) {
+				/*
+				 * Error not available yet.
+				 * fi_cq_read will keep returning -FI_EAVAIL so just bail out and try again later.
+				 */
+				ret = 0;
+				break;
+			} else if (OFI_UNLIKELY(ret < 0)) {
+				NCCL_OFI_WARN("Unable to read from fi_cq_readerr. RC: %d. Error: %s",
+					      ret, fi_strerror(-ret));
+				goto exit;
+			}
+
+			ret = rdma_process_error_entry(&err_entry, rail->cq.get(), rail->rail_id);
+			if (ret != 0) {
+				goto exit;
+			}
+		} else if (rc == -FI_EAGAIN) {
+			/* No completions to process */
+			break;
+		} else {
+			NCCL_OFI_WARN("Unable to retrieve completion queue entries. RC: %zd, ERROR: %s",
+				      rc, fi_strerror(-rc));
+			ret = -EINVAL;
+			goto exit;
+		}
+	}
+
+exit:
+	return ret;
+}
+int nccl_net_ofi_rdma_ep_t::ofi_process_cq_test()
+{
+	int ret;
+
+	nccl_net_ofi_rdma_domain_t *domain_ptr = rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_device_t *device = domain_ptr->rdma_domain_get_device();
+
+	for (uint16_t rail_id = 0; rail_id != this->num_rails; ++rail_id) {
+		nccl_net_ofi_rdma_cq_rail_t *rail = this->rdma_endpoint_get_cq_rail(rail_id);
+
+#if(PROF_TEST & PROF_TEST_CQ_RAIL)
+		g_plugin->test_libf->start_timer();
+#endif
+		ret = ofi_process_cq_rail_test(device, rail);
+#if(PROF_TEST & PROF_TEST_CQ_RAIL)
+		g_plugin->test_libf->stop_timer();
+#endif
+		if (ret != 0) {
+			goto exit;
+		}
+	}
+
+	/* Process any pending requests */
+	ret = this->process_pending_reqs();
+	if (OFI_UNLIKELY(ret != 0 && ret != -FI_EAGAIN)) {
+		NCCL_OFI_WARN("Failed call to process_pending_reqs: %d", ret);
+	}
+
+ exit:
+	return ret;
+}
+
 /*
  * @brief	Zero out rdma request
  */
@@ -2409,7 +2502,14 @@ int nccl_net_ofi_rdma_req::test(int *done, int *size_p)
 			}
 		}
 #endif
-		ret = ep->ofi_process_cq();
+#if(PROF_TEST & PROF_TEST_PROCESS_CQ)
+		g_plugin->test_libf->start_timer();	// estimation in the first round of profiling
+#endif
+		//ret = ep->ofi_process_cq();
+		ret = ep->ofi_process_cq_test();	// same as ofi_process_cq() for test only
+#if(PROF_TEST & PROF_TEST_PROCESS_CQ)
+		g_plugin->test_libf->stop_timer();	// estimation in the first round of profiling
+#endif
 		if (OFI_UNLIKELY(ret != 0))
 			goto exit;
 
@@ -3020,10 +3120,9 @@ int nccl_net_ofi_rdma_ep_t::process_cq_if_pending()
 	return 0;
 }
 
-int nccl_net_ofi_rdma_recv_comm::recv(int n, void **buffers,
-                         			  size_t *sizes, int *tags, 
-									  nccl_net_ofi_mr_handle_t **mhandles, 
-									  nccl_net_ofi_req **base_req)
+int nccl_net_ofi_rdma_recv_comm::recv(int n, void **buffers, size_t *sizes, int *tags,
+				      nccl_net_ofi_mr_handle_t **mhandles, 
+				      nccl_net_ofi_req **base_req) noexcept
 {
 	int ret = 0;
 	nccl_net_ofi_rdma_req *req = NULL;
@@ -3074,7 +3173,15 @@ int nccl_net_ofi_rdma_recv_comm::recv(int n, void **buffers,
 
 	CHECK_ENDPOINT_ACTIVE(endpoint, "recv");
 
+#if(PROF_IRECV & PROF_BEFORE_PENDING_CQ)
+	g_plugin->irecv_total->stop_timer();
+#elif(PROF_IRECV & PROF_PENDING_CQ)
+	g_plugin->irecv_libf_pending_cq->start_timer();
+#endif
 	ret = endpoint->process_cq_if_pending();
+#if(PROF_IRECV & PROF_PENDING_CQ)
+	g_plugin->irecv_libf_pending_cq->stop_timer();
+#endif
 	if (ret == -EAGAIN) {
 		/* Network is still busy. Return NULL to NCCL. */
 		*base_req = NULL;
@@ -3085,6 +3192,9 @@ int nccl_net_ofi_rdma_recv_comm::recv(int n, void **buffers,
 		goto error;
 	}
 
+#if(PROF_IRECV & PROF_REQ_PREP)
+	g_plugin->irecv_libf_pending_cq->start_timer();
+#endif
 	msg_seq_num = this->next_msg_seq_num;
 
 	eager = false;
@@ -3180,14 +3290,26 @@ int nccl_net_ofi_rdma_recv_comm::recv(int n, void **buffers,
 	(this->num_inflight_reqs)++;
 
 	NCCL_OFI_TRACE_RECV(device_id, this, sizes[0], req, base_req);
+#if(PROF_IRECV & PROF_REQ_PREP)
+	g_plugin->irecv_libf_pending_cq->stop_timer();
+#endif
 
 	/* Send ctrl msg */
 	this->n_ctrl_sent += 1;
+#if(PROF_IRECV & PROF_SEND_RECV_PROG)
+	g_plugin->irecv_libf_recv_prog->start_timer();
+#endif
 	ret = receive_progress(req, true);
+#if(PROF_IRECV & PROF_SEND_RECV_PROG)
+	g_plugin->irecv_libf_recv_prog->stop_timer();
+#endif
 	if (OFI_UNLIKELY(ret != 0)) {
 		/* TODO: Remove req from message buffer */
 		goto error;
 	}
+#if(PROF_IRECV & PROF_AFTER_SEND_RECV_PROG)
+	g_plugin->irecv_total->start_timer();
+#endif
 
 	if (eager) {
 		if (recv_data->eager_copy_req == NULL) {
@@ -3220,6 +3342,7 @@ int nccl_net_ofi_rdma_recv_comm::recv(int n, void **buffers,
 		req->free(false);
 	*base_req = NULL;
  exit:
+	//g_plugin->irecv_libf->stop_timer();
 	return ret;
 }
 
@@ -4997,8 +5120,14 @@ static int post_rma_write(nccl_net_ofi_rdma_req *req)
 	msg.context = rdma_req_get_ofi_context(req, rail_id);
 	msg.data = 0;
 
+//#if(PROF_ISEND & PROF_FI_WRITE)
+//	g_plugin->isend_libf_send_prog->start_timer();
+//#endif
 	/* Post the message using fi_writemsg with FI_INJECT */
 	rc = fi_writemsg(comm_rail->local_ep, &msg, rma_op_data->flags);
+//#if(PROF_ISEND & PROF_FI_WRITE)
+//	g_plugin->isend_libf_send_prog->stop_timer();
+//#endif
 
 	if ((rc != 0) && (rc != -FI_EAGAIN)) {
 		NCCL_OFI_WARN("fi_write_inline failed; RC: %zd, Error: %s",
@@ -5021,6 +5150,9 @@ static int post_rdma_write(nccl_net_ofi_rdma_req *req,
 
 	ssize_t rc;
 
+//#if(PROF_ISEND & PROF_FI_WRITE)
+//	g_plugin->isend_libf_send_prog->start_timer();
+//#endif
 	/* Post RDMA write using offset from base address */
 	if (no_target_completion) {
 		rc = fi_write(comm_rail->local_ep, (void*)((uintptr_t)send_data->buff + xfer_info->offset),
@@ -5029,12 +5161,21 @@ static int post_rdma_write(nccl_net_ofi_rdma_req *req,
 					send_data->remote_buff_offset + xfer_info->offset,
 					send_data->remote_mr_key[rail_id], rdma_req_get_ofi_context(req, rail_id));
 	} else {
+#if(PROF_ISEND & PROF_FI_WRITE)
+		g_plugin->isend_libf_send_prog->start_timer();
+#endif
 		rc = fi_writedata(comm_rail->local_ep, (void*)((uintptr_t)send_data->buff + xfer_info->offset),
 					xfer_info->msg_size, desc, send_data->wdata,
 					comm_rail->remote_addr,
 					send_data->remote_buff_offset + xfer_info->offset,
 					send_data->remote_mr_key[rail_id], rdma_req_get_ofi_context(req, rail_id));
+#if(PROF_ISEND & PROF_FI_WRITE)
+		g_plugin->isend_libf_send_prog->stop_timer();
+#endif
 	}
+//#if(PROF_ISEND & PROF_FI_WRITE)
+//	g_plugin->isend_libf_send_prog->stop_timer();
+//#endif
 	if ((rc != 0) && (rc != -FI_EAGAIN)) {
 		NCCL_OFI_WARN("%s failed; RC: %zd, Error: %s",
 			      no_target_completion ? "fi_write" : "fi_writedata",
@@ -5157,6 +5298,7 @@ static int send_progress(nccl_net_ofi_rdma_req *req)
 
 			ret = post_rdma_eager_send(req, comm_rail, xfer_info);
 		} else {
+			//g_plugin->isend_libf->resume_timer();
 			for (uint16_t rail_it = send_data->xferred_rail_id; rail_it < schedule->num_xfer_infos; rail_it++) {
 				/* Get xfer information from the schedule */
 				nccl_net_ofi_xfer_info_t *xfer_info = &xfers[rail_it];
@@ -5171,6 +5313,7 @@ static int send_progress(nccl_net_ofi_rdma_req *req)
 				else
 					break;
 			}
+			//g_plugin->isend_libf->pause_timer();
 		}
 	} else if (req->type == NCCL_OFI_RDMA_WRITE) { // Post RMA write
 		ret = post_rma_write(req);
@@ -5257,11 +5400,17 @@ static int post_rdma_ctrl(nccl_net_ofi_rdma_req *req)
 	void *desc = fi_mr_desc(r_comm->ctrl_mr_handle->mr[rail_id].get());
 	nccl_net_ofi_rdma_recv_comm_rail_t *comm_rail = rdma_recv_comm_get_control_rail(r_comm, rail_id);
 
+#if(PROF_IRECV & PROF_FI_WRITE)
+	g_plugin->irecv_libf_recv_prog->start_timer();
+#endif
 	ssize_t rc = fi_write(comm_rail->local_ep, &r_comm->ctrl_mailbox[slot],
 			ctrl_msg_len, desc,
 			comm_rail->remote_addr,
 			r_comm->remote_mailbox_addr + slot * sizeof(nccl_net_ofi_ctrl_msg_t),
 			r_comm->remote_mr_key[rail_id], rdma_req_get_ofi_context(req, rail_id));
+#if(PROF_IRECV & PROF_FI_WRITE)
+	g_plugin->irecv_libf_recv_prog->stop_timer();
+#endif
 
 	if (rc == 0) {
 		NCCL_OFI_TRACE_WRITE_CTRL_START(req->dev_id,
@@ -5499,7 +5648,7 @@ static inline int check_post_rx_buff_req(nccl_net_ofi_rdma_req *rx_buff_req)
  *       	the application
  */
 int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
-                         			  nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req **base_req)
+				      nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req **base_req) noexcept
 {
     int ret = 0;
     nccl_net_ofi_rdma_send_comm *s_comm = this;
@@ -5537,7 +5686,15 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 
 	CHECK_ENDPOINT_ACTIVE(endpoint, "send");
 
+#if(PROF_ISEND & PROF_BEFORE_PENDING_CQ)
+	g_plugin->isend_total->stop_timer();
+#elif(PROF_ISEND & PROF_PENDING_CQ)
+	g_plugin->isend_libf_pending_cq->start_timer();
+#endif
 	ret = endpoint->process_cq_if_pending();
+#if(PROF_ISEND & PROF_PENDING_CQ)
+	g_plugin->isend_libf_pending_cq->stop_timer();
+#endif
 	if (ret == -EAGAIN) {
 		/* Network is still busy. Return NULL to NCCL. */
 		*base_req = NULL;
@@ -5547,6 +5704,9 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 	if (ret != 0) {
 		goto error;
 	}
+#if(PROF_ISEND & PROF_REQ_PREP)
+	g_plugin->isend_libf_pending_cq->start_timer();
+#endif
 
 	/* NCCL versions prior to 2.24 require special handling for 0 byte
 	 * messages when using user buffer registration.  NCCL passes the base
@@ -5616,11 +5776,19 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 	}
 
 	NCCL_OFI_TRACE_SEND(req->dev_id, size, s_comm, msg_seq_num, req, base_req);
+#if(PROF_ISEND & PROF_REQ_PREP)
+	g_plugin->isend_libf_pending_cq->stop_timer();
+#endif
 
 	/* Try posting RDMA write for received RDMA control messages */
 	if (have_ctrl || eager) {
-
+#if(PROF_ISEND & PROF_SEND_RECV_PROG)
+		g_plugin->isend_libf_send_prog->start_timer();
+#endif
 		ret = send_progress(req);
+#if(PROF_ISEND & PROF_SEND_RECV_PROG)
+		g_plugin->isend_libf_send_prog->stop_timer();
+#endif
 		if (ret == -FI_EAGAIN) {
 			/* Add to pending reqs queue */
 			nccl_net_ofi_mutex_lock(&endpoint->pending_reqs_lock);
@@ -5634,7 +5802,9 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 			goto error;
 		}
 	}
-
+#if(PROF_ISEND & PROF_AFTER_SEND_RECV_PROG)
+	g_plugin->isend_total->start_timer();
+#endif
 	/* Return request to NCCL */
 	*base_req = req;
 	/* Increment next_msg_seq_num for next call */
@@ -5647,6 +5817,7 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 		req->free(false);
 	*base_req = NULL;
  exit:
+	//g_plugin->isend_libf->stop_timer();
 	return ret;
 }
 
@@ -7013,6 +7184,12 @@ static void get_hints(struct fi_info *hints)
 	hints->domain_attr->cq_data_size = 4;
 }
 
+static void print_and_free_histogram(timer_histogram<histogram_custom_binner<size_t> > **hist)
+{
+	(*hist)->print_stats();
+	delete (*hist);
+	(*hist) = nullptr;
+}
 
 nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 {
@@ -7029,6 +7206,38 @@ nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 	if (s_comm_cleanup_list != nullptr) {
 		delete s_comm_cleanup_list;
 		s_comm_cleanup_list = nullptr;
+	}
+
+	if (this->isend_total) {
+		NCCL_OFI_WARN("NCCLOFI-1149 profile type: 0x%x, 0x%x, 0x%x", PROF_ISEND, PROF_IRECV, PROF_TEST);
+#if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG))
+		print_and_free_histogram(&this->isend_total);
+#endif
+#if(PROF_ISEND & (PROF_PENDING_CQ | PROF_REQ_PREP))
+		print_and_free_histogram(&this->isend_libf_pending_cq);
+#endif
+#if(PROF_ISEND & (PROF_SEND_RECV_PROG | PROF_FI_WRITE))
+		print_and_free_histogram(&this->isend_libf_send_prog);
+#endif
+
+#if(PROF_IRECV & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ | PROF_AFTER_SEND_RECV_PROG))
+		print_and_free_histogram(&this->irecv_total);
+#endif
+#if(PROF_IRECV & (PROF_PENDING_CQ | PROF_REQ_PREP))
+		print_and_free_histogram(&this->irecv_libf_pending_cq);
+#endif
+#if(PROF_IRECV & (PROF_SEND_RECV_PROG | PROF_FI_WRITE))
+		print_and_free_histogram(&this->irecv_libf_recv_prog);
+#endif
+
+#if(PROF_TEST & PROF_TEST_TOTAL)
+		print_and_free_histogram(&this->test_total);
+#else
+		print_and_free_histogram(&this->test_libf);
+#endif
+		print_and_free_histogram(&this->timer_overhead);
+		print_and_free_histogram(&this->timer_overhead2);
+		print_and_free_histogram(&this->timer_overhead3);
 	}
 
 	delete[] flush_sentinel;
@@ -7260,6 +7469,7 @@ int nccl_net_ofi_rdma_init(const char *provider_filter,
 	}
 
 	plugin = new nccl_net_ofi_rdma_plugin_t(provider_list, topo);
+	g_plugin = plugin;
 
 	/**
 	 * NCCL's topology detection will set NIC PCIe link speed based on the

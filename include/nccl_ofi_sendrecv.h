@@ -68,7 +68,7 @@ class nccl_net_ofi_sendrecv_send_comm : public nccl_net_ofi_send_comm {
 public:
     int regMr(nccl_ofi_mr_ckey_ref ckey, int type, void **mhandle) override;
     int deregMr(nccl_net_ofi_mr_handle_t *mhandle) override;
-    int send(void *data, size_t size, int tag, nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req **req) override;
+    int send(void *data, size_t size, int tag, nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req **req) noexcept override;
     int close() override;
     
     // RMA operations not supported for SendRecv protocol
@@ -106,7 +106,7 @@ class nccl_net_ofi_sendrecv_recv_comm : public nccl_net_ofi_recv_comm {
 public:
     int regMr(nccl_ofi_mr_ckey_ref ckey, int type, void **mhandle) override;
     int deregMr(nccl_net_ofi_mr_handle_t *mhandle) override;
-    int recv(int n, void **data, size_t *sizes, int *tags, nccl_net_ofi_mr_handle_t **mhandles, nccl_net_ofi_req **req) override;
+    int recv(int n, void **data, size_t *sizes, int *tags, nccl_net_ofi_mr_handle_t **mhandles, nccl_net_ofi_req **req) noexcept override;
     int flush(int n, void **data, int *sizes, nccl_net_ofi_mr_handle_t **mhandles, nccl_net_ofi_req **req) override;
     int close() override;
     
