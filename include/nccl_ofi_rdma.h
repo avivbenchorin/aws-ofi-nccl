@@ -545,7 +545,7 @@ class nccl_net_ofi_rdma_send_comm : public nccl_net_ofi_send_comm {
 public:
     int regMr(nccl_ofi_mr_ckey_ref ckey, int type, void **mhandle) override;
     int deregMr(nccl_net_ofi_mr_handle_t *mhandle) override;
-    int send(void *data, size_t size, int tag, nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req **req) override;
+    int send(void *data, size_t size, int tag, nccl_net_ofi_mr_handle_t *mhandle, nccl_net_ofi_req **req) noexcept override;
     int close() override;
     int write(void* src, size_t size, void* src_mhandle, uint64_t dest, uint64_t mr_key, nccl_net_ofi_req **req) override;
     int write_inline(void* src, size_t size, uint64_t dest, uint64_t mr_key, nccl_net_ofi_req **request) override;
@@ -634,7 +634,7 @@ class nccl_net_ofi_rdma_recv_comm : public nccl_net_ofi_recv_comm {
 public:
     int regMr(nccl_ofi_mr_ckey_ref ckey, int type, void **mhandle) override;
     int deregMr(nccl_net_ofi_mr_handle_t *mhandle) override;
-    int recv(int n, void **data, size_t *sizes, int *tags, nccl_net_ofi_mr_handle_t **mhandles, nccl_net_ofi_req **req) override;
+    int recv(int n, void **data, size_t *sizes, int *tags, nccl_net_ofi_mr_handle_t **mhandles, nccl_net_ofi_req **req) noexcept override;
     int flush(int n, void **data, int *sizes, nccl_net_ofi_mr_handle_t **mhandles, nccl_net_ofi_req **req) override;
     int close() override;
     int read(void* dest, size_t size, void* dest_mhandle, uint64_t src, uint64_t mr_key, nccl_net_ofi_req **req) override;
@@ -1162,6 +1162,7 @@ public:
 	 *		error, on others
 	 */
 	int ofi_process_cq();
+	int ofi_process_cq_test();
 
 	int handle_rx_eagain(nccl_net_ofi_rdma_ep_rail_t *rail,
 			     nccl_net_ofi_rdma_req *req,
