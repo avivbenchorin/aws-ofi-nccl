@@ -475,7 +475,13 @@ ncclResult_t nccl_net_ofi_isend(void* sendComm, void* data, size_t size,
 		return check_return(ncclInternalError);
 	}
 
+#if(PROF_ISEND & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ))
+	plugin->isend_total->start_timer();
+#endif
 	int ret = send_comm->send(send_comm, data, size, tag, handle, base_req);
+#if(PROF_ISEND & (PROF_TOTAL | PROF_AFTER_SEND_RECV_PROG))
+	plugin->isend_total->stop_timer();
+#endif
 	return nccl_net_ofi_retval_translate_impl(ret);
 }
 
@@ -528,7 +534,15 @@ ncclResult_t nccl_net_ofi_irecv(void* recvComm, int n, void** data,
 		return check_return(ncclInternalError);
 	}
 
+#if(PROF_IRECV & (PROF_TOTAL | PROF_BEFORE_PENDING_CQ))
+	plugin->irecv_total->start_timer();
+#endif
+
 	int ret = recv_comm->recv(recv_comm, n, data, sizes, tags, handles, base_req);
+#if(PROF_IRECV & (PROF_TOTAL | PROF_AFTER_SEND_RECV_PROG))
+	plugin->irecv_total->stop_timer();
+#endif
+
 	return nccl_net_ofi_retval_translate_impl(ret);
 }
 
@@ -540,8 +554,14 @@ ncclResult_t nccl_net_ofi_test(void* req, int* done, int* size)
 		return check_return(ncclInternalError);
 	}
 
+#if(PROF_TEST & PROF_TEST_TOTAL)
+	plugin->test_total->start_timer();
+#endif
 	nccl_net_ofi_req_t *base_req = (nccl_net_ofi_req_t *)req;
 	int ret = base_req->test(base_req, done, size);
+#if(PROF_TEST & PROF_TEST_TOTAL)
+	plugin->test_total->stop_timer();
+#endif
 	return nccl_net_ofi_retval_translate_impl(ret);
 }
 

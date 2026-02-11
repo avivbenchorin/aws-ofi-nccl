@@ -1138,6 +1138,7 @@ public:
 	 *		error, on others
 	 */
 	int ofi_process_cq();
+	int ofi_process_cq_test();
 
 	int handle_rx_eagain(nccl_net_ofi_rdma_ep_rail_t *rail,
 			     nccl_net_ofi_rdma_req_t *req,
