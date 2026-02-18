@@ -1046,6 +1046,12 @@ public:
 	timer_histogram<histogram_custom_binner<size_t> > *timer_overhead2;
 	timer_histogram<histogram_custom_binner<size_t> > *timer_overhead3;
 
+	/**
+	 * Histograms to profile scheduler rr_lock hold time
+	 */
+	timer_histogram<histogram_custom_binner<size_t> > *sched_rr_hold_small;
+	timer_histogram<histogram_custom_binner<size_t> > *sched_rr_hold_large;
+
 protected:
 	/* Array of devices */
 	std::vector<nccl_net_ofi_device_t *> p_devs;

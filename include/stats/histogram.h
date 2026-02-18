@@ -155,6 +155,12 @@ protected:
 #define PROF_TEST_CQ_RAIL	0x2
 #define PROF_TEST_FI_CQ_READ	0x4
 
+// Scheduler profiling base
+#define PROF_SCHED_BASE		0x80000
+
+// Scheduler sub-categories
+#define PROF_SCHED_RR_HOLD	0x1
+
 /* Old table for ref...
 #define PROF_ISEND_TOTAL	0
 #define PROF_ISEND_PENDING_CQ	1
@@ -177,8 +183,14 @@ protected:
 */
 
 // Alternating following to do different profiling every time.
-#define PROF_ISEND	(PROF_ISEND_BASE | PROF_MUTEX)
-#define PROF_IRECV	(PROF_IRECV_BASE | PROF_AFTER_SEND_RECV_PROG)
-#define PROF_TEST	(PROF_TEST_BASE | PROF_TEST_FI_CQ_READ)
+// #define PROF_ISEND	(PROF_ISEND_BASE | PROF_MUTEX)
+// #define PROF_IRECV	(PROF_IRECV_BASE | PROF_AFTER_SEND_RECV_PROG)
+// #define PROF_TEST	(PROF_TEST_BASE | PROF_TEST_FI_CQ_READ)
+#define PROF_ISEND	(PROF_ISEND_BASE)
+#define PROF_IRECV	(PROF_IRECV_BASE)
+#define PROF_TEST	(PROF_TEST_BASE)
+
+// Active scheduler profiling (can be changed at compile time)
+#define PROF_SCHED	(PROF_SCHED_BASE | PROF_SCHED_RR_HOLD)
 
 #endif

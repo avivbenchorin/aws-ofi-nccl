@@ -404,6 +404,35 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 	plugin->timer_overhead2 = new timer_histogram<histogram_custom_binner<size_t> >("Histogram Timer Overhead2 Duration", histogram_custom_binner<size_t>(overhead_bins), ovh_0);
 	plugin->timer_overhead3 = new timer_histogram<histogram_custom_binner<size_t> >("Histogram Timer Overhead2 Duration", histogram_custom_binner<size_t>(overhead_bins), ovh_0);
 
+	// Scheduler rr_lock hold time bins (nanoseconds)
+	// Lock hold time is very short: just incrementing a counter
+	// Expected range: 10-200ns for uncontended, up to 5000ns for contended
+	static std::vector<size_t> sched_lock_bins = {
+		0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100,
+		120, 140, 160, 180, 200, 250, 300, 350, 400, 500,
+		600, 700, 800, 900, 1000, 1500, 2000, 3000, 5000, 10000
+	};
+
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+	plugin->sched_rr_hold_small = new timer_histogram<histogram_custom_binner<size_t> >(
+		"Scheduler rr_lock Hold Time (Small Messages)",
+		histogram_custom_binner<size_t>(sched_lock_bins),
+		ovh_30
+	);
+#else
+	plugin->sched_rr_hold_small = nullptr;
+#endif
+
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+	plugin->sched_rr_hold_large = new timer_histogram<histogram_custom_binner<size_t> >(
+		"Scheduler rr_lock Hold Time (Large Messages)",
+		histogram_custom_binner<size_t>(sched_lock_bins),
+		ovh_30
+	);
+#else
+	plugin->sched_rr_hold_large = nullptr;
+#endif
+
 	for (int x = 0; x < 100; x++) {
 		plugin->timer_overhead->start_timer();
 		plugin->timer_overhead2->start_timer();

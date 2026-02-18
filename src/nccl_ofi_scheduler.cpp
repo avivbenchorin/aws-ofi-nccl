@@ -14,6 +14,10 @@
 #include "nccl_ofi_math.h"
 #include "nccl_ofi_param.h"
 #include "nccl_ofi_pthread.h"
+#include "nccl_ofi.h"  // For g_plugin access
+
+// External declaration of global plugin pointer (defined in nccl_ofi_rdma.cpp)
+extern nccl_net_ofi_plugin_t *g_plugin;
 
 /*
  * @brief	Size of s schedule struct capable to store `num_rails' xfer info objects
@@ -83,10 +87,16 @@ static inline int set_schedule_by_threshold(nccl_net_ofi_threshold_scheduler_t *
 	assert(num_rails > 0);
 
 	if (size < scheduler->max_small_msg_size) {
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+		g_plugin->sched_rr_hold_small->start_timer();
+#endif
 		nccl_net_ofi_mutex_lock(&scheduler->rr_lock);
 		int curr_rail_id = scheduler->rr_small_counter;
 		scheduler->rr_small_counter = (scheduler->rr_small_counter + 1) % num_rails;
 		nccl_net_ofi_mutex_unlock(&scheduler->rr_lock);
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+		g_plugin->sched_rr_hold_small->stop_timer();
+#endif
 
 		schedule->num_xfer_infos = 1;
 
@@ -98,10 +108,16 @@ static inline int set_schedule_by_threshold(nccl_net_ofi_threshold_scheduler_t *
 		num_stripes = get_num_stripes(scheduler, size, num_rails);
 		assert(num_stripes <= num_rails);
 
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+		g_plugin->sched_rr_hold_large->start_timer();
+#endif
 		nccl_net_ofi_mutex_lock(&scheduler->rr_lock);
 		int curr_rail_id = scheduler->rr_counter;
 		scheduler->rr_counter = (scheduler->rr_counter + num_stripes) % num_rails;
 		nccl_net_ofi_mutex_unlock(&scheduler->rr_lock);
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+		g_plugin->sched_rr_hold_large->stop_timer();
+#endif
 
 		/* Number of bytes left to assign */
 		size_t left = size;

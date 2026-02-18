@@ -7278,6 +7278,11 @@ nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 		print_and_free_histogram(&this->timer_overhead);
 		print_and_free_histogram(&this->timer_overhead2);
 		print_and_free_histogram(&this->timer_overhead3);
+
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
+		print_and_free_histogram(&this->sched_rr_hold_small);
+		print_and_free_histogram(&this->sched_rr_hold_large);
+#endif
 	}
 
 	delete[] flush_sentinel;
