@@ -8,6 +8,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <pthread.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include "nccl_ofi_scheduler.h"
 #include "nccl_ofi_log.h"
@@ -18,6 +20,90 @@
 
 // External declaration of global plugin pointer (defined in nccl_ofi_rdma.cpp)
 extern nccl_net_ofi_plugin_t *g_plugin;
+
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+
+// Thread-local histogram pointers
+// These are initialized to nullptr and allocated on first use by each thread
+static thread_local timer_histogram<histogram_custom_binner<size_t>> *tls_sched_rr_hold_small = nullptr;
+static thread_local timer_histogram<histogram_custom_binner<size_t>> *tls_sched_rr_hold_large = nullptr;
+
+/**
+ * @brief Get or create thread-local histogram for small messages
+ * 
+ * Lazily initializes the thread-local histogram on first call.
+ * The histogram is registered with the global plugin for cleanup.
+ * 
+ * @return Pointer to thread-local histogram
+ */
+static inline timer_histogram<histogram_custom_binner<size_t>>* 
+get_tls_histogram_small()
+{
+	if (OFI_UNLIKELY(tls_sched_rr_hold_small == nullptr)) {
+		// First use by this thread - create histogram
+		char thread_desc[256];
+		snprintf(thread_desc, sizeof(thread_desc), 
+		         "Scheduler rr_lock Hold Time (Small Messages) - Thread %lu (TID %ld)",
+		         (unsigned long)pthread_self(),
+		         (long)syscall(SYS_gettid));
+		
+		tls_sched_rr_hold_small = new timer_histogram<histogram_custom_binner<size_t>>(
+			thread_desc,
+			histogram_custom_binner<size_t>(*g_plugin->sched_lock_bins_ptr),
+			std::chrono::nanoseconds(0)
+		);
+		
+		// Register for cleanup
+		nccl_net_ofi_mutex_lock(&g_plugin->thread_histogram_registry_lock);
+		g_plugin->thread_histograms_small.push_back(tls_sched_rr_hold_small);
+		nccl_net_ofi_mutex_unlock(&g_plugin->thread_histogram_registry_lock);
+		
+		NCCL_OFI_TRACE(NCCL_NET, "Initialized thread-local histogram for small messages (Thread %lu)",
+		              (unsigned long)pthread_self());
+	}
+	
+	return tls_sched_rr_hold_small;
+}
+
+/**
+ * @brief Get or create thread-local histogram for large messages
+ * 
+ * Lazily initializes the thread-local histogram on first call.
+ * The histogram is registered with the global plugin for cleanup.
+ * 
+ * @return Pointer to thread-local histogram
+ */
+static inline timer_histogram<histogram_custom_binner<size_t>>* 
+get_tls_histogram_large()
+{
+	if (OFI_UNLIKELY(tls_sched_rr_hold_large == nullptr)) {
+		// First use by this thread - create histogram
+		char thread_desc[256];
+		snprintf(thread_desc, sizeof(thread_desc), 
+		         "Scheduler rr_lock Hold Time (Large Messages) - Thread %lu (TID %ld)",
+		         (unsigned long)pthread_self(),
+		         (long)syscall(SYS_gettid));
+		
+		tls_sched_rr_hold_large = new timer_histogram<histogram_custom_binner<size_t>>(
+			thread_desc,
+			histogram_custom_binner<size_t>(*g_plugin->sched_lock_bins_ptr),
+			std::chrono::nanoseconds(0)
+		);
+		
+		// Register for cleanup
+		nccl_net_ofi_mutex_lock(&g_plugin->thread_histogram_registry_lock);
+		g_plugin->thread_histograms_large.push_back(tls_sched_rr_hold_large);
+		nccl_net_ofi_mutex_unlock(&g_plugin->thread_histogram_registry_lock);
+		
+		NCCL_OFI_TRACE(NCCL_NET, "Initialized thread-local histogram for large messages (Thread %lu)",
+		              (unsigned long)pthread_self());
+	}
+	
+	return tls_sched_rr_hold_large;
+}
+
+#endif // PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD
+
 
 /*
  * @brief	Size of s schedule struct capable to store `num_rails' xfer info objects
@@ -90,10 +176,17 @@ static inline int set_schedule_by_threshold(nccl_net_ofi_threshold_scheduler_t *
 #if(PROF_SCHED & PROF_SCHED_RR_HOLD)
 		g_plugin->sched_rr_hold_small->start_timer();
 #endif
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+		auto *tls_hist_small = get_tls_histogram_small();
+		tls_hist_small->start_timer();
+#endif
 		nccl_net_ofi_mutex_lock(&scheduler->rr_lock);
 		int curr_rail_id = scheduler->rr_small_counter;
 		scheduler->rr_small_counter = (scheduler->rr_small_counter + 1) % num_rails;
 		nccl_net_ofi_mutex_unlock(&scheduler->rr_lock);
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+		tls_hist_small->stop_timer();
+#endif
 #if(PROF_SCHED & PROF_SCHED_RR_HOLD)
 		g_plugin->sched_rr_hold_small->stop_timer();
 #endif
@@ -111,10 +204,17 @@ static inline int set_schedule_by_threshold(nccl_net_ofi_threshold_scheduler_t *
 #if(PROF_SCHED & PROF_SCHED_RR_HOLD)
 		g_plugin->sched_rr_hold_large->start_timer();
 #endif
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+		auto *tls_hist_large = get_tls_histogram_large();
+		tls_hist_large->start_timer();
+#endif
 		nccl_net_ofi_mutex_lock(&scheduler->rr_lock);
 		int curr_rail_id = scheduler->rr_counter;
 		scheduler->rr_counter = (scheduler->rr_counter + num_stripes) % num_rails;
 		nccl_net_ofi_mutex_unlock(&scheduler->rr_lock);
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+		tls_hist_large->stop_timer();
+#endif
 #if(PROF_SCHED & PROF_SCHED_RR_HOLD)
 		g_plugin->sched_rr_hold_large->stop_timer();
 #endif

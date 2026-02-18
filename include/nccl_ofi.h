@@ -1047,10 +1047,24 @@ public:
 	timer_histogram<histogram_custom_binner<size_t> > *timer_overhead3;
 
 	/**
-	 * Histograms to profile scheduler rr_lock hold time
+	 * Histograms to profile scheduler rr_lock hold time (aggregate mode)
 	 */
 	timer_histogram<histogram_custom_binner<size_t> > *sched_rr_hold_small;
 	timer_histogram<histogram_custom_binner<size_t> > *sched_rr_hold_large;
+
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+	/**
+	 * Per-thread histogram registry for scheduler rr_lock profiling
+	 * Each thread that uses the scheduler lock will have its own histograms
+	 * registered here for cleanup and statistics output.
+	 */
+	std::vector<timer_histogram<histogram_custom_binner<size_t>>*> thread_histograms_small;
+	std::vector<timer_histogram<histogram_custom_binner<size_t>>*> thread_histograms_large;
+	pthread_mutex_t thread_histogram_registry_lock;
+	
+	// Bin configuration for thread-local histograms (shared across threads)
+	std::vector<size_t> *sched_lock_bins_ptr;
+#endif
 
 protected:
 	/* Array of devices */

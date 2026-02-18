@@ -159,7 +159,8 @@ protected:
 #define PROF_SCHED_BASE		0x80000
 
 // Scheduler sub-categories
-#define PROF_SCHED_RR_HOLD	0x1
+#define PROF_SCHED_RR_HOLD	0x1  // Aggregate histogram (per-process)
+#define PROF_SCHED_RR_HOLD_PER_THREAD	0x2  // Per-thread histograms
 
 /* Old table for ref...
 #define PROF_ISEND_TOTAL	0

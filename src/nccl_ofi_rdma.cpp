@@ -7283,6 +7283,37 @@ nccl_net_ofi_rdma_plugin_t::~nccl_net_ofi_rdma_plugin_t()
 		print_and_free_histogram(&this->sched_rr_hold_small);
 		print_and_free_histogram(&this->sched_rr_hold_large);
 #endif
+
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+		// Print and cleanup per-thread histograms
+		NCCL_OFI_INFO(NCCL_NET, "=== Per-Thread Scheduler Lock Statistics ===");
+		NCCL_OFI_INFO(NCCL_NET, "Small Messages: %zu threads", this->thread_histograms_small.size());
+		for (auto *hist : this->thread_histograms_small) {
+			if (hist) {
+				hist->print_stats();
+				delete hist;
+			}
+		}
+		this->thread_histograms_small.clear();
+		
+		NCCL_OFI_INFO(NCCL_NET, "Large Messages: %zu threads", this->thread_histograms_large.size());
+		for (auto *hist : this->thread_histograms_large) {
+			if (hist) {
+				hist->print_stats();
+				delete hist;
+			}
+		}
+		this->thread_histograms_large.clear();
+		
+		// Cleanup registry lock
+		nccl_net_ofi_mutex_destroy(&this->thread_histogram_registry_lock);
+		
+		// Cleanup bin configuration
+		if (this->sched_lock_bins_ptr) {
+			delete this->sched_lock_bins_ptr;
+			this->sched_lock_bins_ptr = nullptr;
+		}
+#endif
 	}
 
 	delete[] flush_sentinel;

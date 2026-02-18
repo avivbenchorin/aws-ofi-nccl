@@ -413,24 +413,35 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 		600, 700, 800, 900, 1000, 1500, 2000, 3000, 5000, 10000
 	};
 
+	// Initialize aggregate histograms (always available when PROF_SCHED_RR_HOLD is set)
 #if(PROF_SCHED & PROF_SCHED_RR_HOLD)
 	plugin->sched_rr_hold_small = new timer_histogram<histogram_custom_binner<size_t> >(
-		"Scheduler rr_lock Hold Time (Small Messages)",
+		"Scheduler rr_lock Hold Time (Small Messages) - AGGREGATE",
+		histogram_custom_binner<size_t>(sched_lock_bins),
+		ovh_30
+	);
+	plugin->sched_rr_hold_large = new timer_histogram<histogram_custom_binner<size_t> >(
+		"Scheduler rr_lock Hold Time (Large Messages) - AGGREGATE",
 		histogram_custom_binner<size_t>(sched_lock_bins),
 		ovh_30
 	);
 #else
 	plugin->sched_rr_hold_small = nullptr;
+	plugin->sched_rr_hold_large = nullptr;
 #endif
 
-#if(PROF_SCHED & PROF_SCHED_RR_HOLD)
-	plugin->sched_rr_hold_large = new timer_histogram<histogram_custom_binner<size_t> >(
-		"Scheduler rr_lock Hold Time (Large Messages)",
-		histogram_custom_binner<size_t>(sched_lock_bins),
-		ovh_30
-	);
-#else
-	plugin->sched_rr_hold_large = nullptr;
+	// Initialize per-thread histogram registry (optional)
+#if(PROF_SCHED & PROF_SCHED_RR_HOLD_PER_THREAD)
+	// Store bin configuration for thread-local histogram creation
+	plugin->sched_lock_bins_ptr = new std::vector<size_t>(sched_lock_bins);
+	
+	ret = nccl_net_ofi_mutex_init(&plugin->thread_histogram_registry_lock, NULL);
+	if (ret != 0) {
+		NCCL_OFI_WARN("Failed to initialize thread histogram registry lock");
+		goto exit;
+	}
+	
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Per-thread scheduler lock profiling enabled");
 #endif
 
 	for (int x = 0; x < 100; x++) {
