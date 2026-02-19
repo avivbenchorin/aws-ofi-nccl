@@ -192,6 +192,6 @@ protected:
 #define PROF_TEST	(PROF_TEST_BASE)
 
 // Active scheduler profiling (can be changed at compile time)
-#define PROF_SCHED	(PROF_SCHED_BASE | PROF_SCHED_RR_HOLD)
+#define PROF_SCHED	(PROF_SCHED_BASE | PROF_SCHED_RR_HOLD_PER_THREAD)
 
 #endif
