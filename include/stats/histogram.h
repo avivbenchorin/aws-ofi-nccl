@@ -114,17 +114,24 @@ public:
 
 	void start_timer(void)
 	{
+		active_recording = true;
 		start_time = clock::now();
 		asm volatile ("" : : : "memory");
 	}
 
-	rep stop_timer(void)
+	rep stop_timer(bool reset_start_time = false)
 	{
+		if (active_recording == false) {
+			return 0;
+		}
 		asm volatile ("" : : : "memory");
 		auto now = clock::now();
 		auto duration = std::chrono::duration_cast<DuraUnit>(now - start_time);
 		duration -= overhead;
 		insert(duration.count());
+		if (reset_start_time) {
+			active_recording = false;
+		}
 		return duration.count();
 	}
 
@@ -132,6 +139,7 @@ public:
 protected:
 	typename clock::time_point start_time;
 	DuraUnit overhead = DuraUnit::zero();
+	bool active_recording = false;
 };
 
 // Profiling category base
@@ -140,19 +148,19 @@ protected:
 #define PROF_TEST_BASE		0x40000
 
 // Send / Recv  sub category
-#define PROF_TOTAL		0x0
-#define PROF_BEFORE_PENDING_CQ	0x1
-#define PROF_PENDING_CQ		0x2
-#define PROF_REQ_PREP		0x4
-#define PROF_SEND_RECV_PROG	0x8
-#define PROF_AFTER_SEND_RECV_PROG	0x10
-#define PROF_FI_WRITE		0x20
+#define PROF_TOTAL		0x1
+#define PROF_BEFORE_PENDING_CQ	0x2
+#define PROF_PENDING_CQ		0x4
+#define PROF_REQ_PREP		0x8
+#define PROF_SEND_RECV_PROG	0x10
+#define PROF_AFTER_SEND_RECV_PROG	0x20
+#define PROF_FI_WRITE		0x40
 
 // Test sub category
-#define PROF_TEST_TOTAL		0x0
-#define PROF_TEST_PROCESS_CQ	0x1
-#define PROF_TEST_CQ_RAIL	0x2
-#define PROF_TEST_FI_CQ_READ	0x4
+#define PROF_TEST_TOTAL		0x1
+#define PROF_TEST_PROCESS_CQ	0x2
+#define PROF_TEST_CQ_RAIL	0x4
+#define PROF_TEST_FI_CQ_READ	0x8
 
 /* Old table for ref...
 #define PROF_ISEND_TOTAL	0
