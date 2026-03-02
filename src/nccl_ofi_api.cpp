@@ -479,7 +479,7 @@ ncclResult_t nccl_net_ofi_isend(void* sendComm, void* data, size_t size,
 #endif
 	int ret = send_comm->send(data, size, tag, handle, base_req);
 #if(PROF_ISEND & (PROF_TOTAL | PROF_AFTER_SEND_RECV_PROG))
-	plugin->isend_total->stop_timer();
+	plugin->isend_total->stop_timer(true);
 #endif
 	return nccl_net_ofi_retval_translate_impl(ret);
 }
@@ -539,7 +539,7 @@ ncclResult_t nccl_net_ofi_irecv(void* recvComm, int n, void** data,
 
 	int ret = recv_comm->recv(n, data, sizes, tags, handles, base_req);
 #if(PROF_IRECV & (PROF_TOTAL | PROF_AFTER_SEND_RECV_PROG))
-	plugin->irecv_total->stop_timer();
+	plugin->irecv_total->stop_timer(true);
 #endif
 
 	return nccl_net_ofi_retval_translate_impl(ret);
