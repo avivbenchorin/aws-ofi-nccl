@@ -35,6 +35,7 @@ sources = \
 	nccl_ofi_ep_addr_list.cpp \
 	nccl_ofi_param.cpp \
 	nccl_ofi_platform.cpp \
+	rdtscp_clock.cpp \
 	tracepoint.cpp
 
 if WANT_PLATFORM_AWS

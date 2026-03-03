@@ -6,6 +6,7 @@ freelist
 idpool
 mr
 msgbuff
+rdtscp_clock
 region_based_tuner
 scheduler
 histogram
