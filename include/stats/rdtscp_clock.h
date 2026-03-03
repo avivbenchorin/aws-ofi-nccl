@@ -50,8 +50,12 @@ public:
     static time_point now() noexcept;
     static void initialize();
     static double get_cycles_per_ns();
+    static bool has_invariant_tsc();
+    static bool read_tsc_freq_from_cpuid_0x15(double& cycles_per_ns);
+    static bool read_tsc_freq_from_cpuid_0x16(double& cycles_per_ns);
     static bool read_tsc_freq_from_sysfs(double& cycles_per_ns);
     static bool read_tsc_freq_from_cpuinfo(double& cycles_per_ns);
+    static void calibrate_tsc_frequency();
     
     /*
      * Read Time Stamp Counter using RDTSCP instruction
@@ -61,6 +65,26 @@ public:
      * - Reads the processor ID (returned in ECX via aux parameter)
      * - Serializes with respect to all prior instructions
      * - Does not serialize with respect to subsequent instructions
+     * 
+     * Memory Barrier Behavior:
+     * ========================
+     * The inline assembly includes a "memory" clobber which acts as a compiler
+     * barrier. This prevents the compiler from reordering memory operations
+     * across the rdtscp instruction. Combined with rdtscp's hardware serialization
+     * (waits for prior instructions), this provides sufficient ordering for
+     * accurate timing measurements.
+     * 
+     * When used with timer_histogram:
+     * - start_timer() has a barrier AFTER clock::now() to prevent code motion
+     *   into the timed region
+     * - stop_timer() has a barrier BEFORE clock::now() to prevent code motion
+     *   out of the timed region
+     * - These barriers work correctly with rdtscp's serialization properties
+     * 
+     * No additional barriers are needed in now() because:
+     * 1. rdtscp waits for all prior instructions (hardware serialization)
+     * 2. The "memory" clobber prevents compiler reordering
+     * 3. We only need to measure code that executes BEFORE the timer read
      * 
      * This function tries to use the compiler intrinsic __rdtscp if available,
      * otherwise falls back to inline assembly.
@@ -92,8 +116,6 @@ public:
 private:
     static double cycles_per_ns_;
     static bool initialized_;
-    
-    static void calibrate_tsc_frequency();
 };
 
 #else // !RDTSCP_AVAILABLE

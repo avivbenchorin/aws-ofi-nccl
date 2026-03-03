@@ -24,6 +24,7 @@ noinst_PROGRAMS = \
 	mr \
 	histogram_binner \
 	histogram \
+	histogram_typedef_test \
 	rdtscp_clock \
 	dlopen_c_test \
 	param \
@@ -57,6 +58,7 @@ mr_SOURCES = mr.cpp
 aws_platform_mapper_SOURCES = aws_platform_mapper.cpp
 histogram_binner_SOURCES = histogram_binner.cpp
 histogram_SOURCES = histogram.cpp
+histogram_typedef_test_SOURCES = histogram_typedef_test.cpp
 rdtscp_clock_SOURCES = rdtscp_clock.cpp
 dlopen_c_test_SOURCES = dlopen_c_test.c
 param_SOURCES = param.cpp

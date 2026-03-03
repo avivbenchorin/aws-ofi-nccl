@@ -10,6 +10,7 @@
 #include "nccl_ofi.h"
 #include "nccl_ofi_api.h"
 #include "nccl_ofi_param.h"
+#include "stats/rdtscp_clock.h"
 
 
 static_assert(sizeof(nccl_net_ofi_conn_handle_t) <= NCCL_NET_HANDLE_MAXSIZE,
@@ -66,6 +67,12 @@ ncclResult_t nccl_net_ofi_init(ncclDebugLogger_t logFunction)
 	ofi_log_function = logFunction;
 
 	abort_on_error = (ofi_nccl_abort_on_error() != 0);
+
+#if RDTSCP_AVAILABLE
+	// Initialize rdtscp_clock for high-precision timing
+	// This must be called before any rdtscp_clock usage to calibrate TSC frequency
+	rdtscp_clock::initialize();
+#endif
 	try {
 		ret = nccl_net_ofi_create_plugin(&plugin);
 		if (OFI_UNLIKELY(ret != 0)) {

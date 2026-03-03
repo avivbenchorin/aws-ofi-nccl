@@ -92,7 +92,7 @@ test_clock::rep test_clock::clock = 0;
 static void check_timer_histogram(void)
 {
 	using test_histogram = timer_histogram<histogram_linear_binner<std::size_t>,
-						test_clock>;
+						test_clock, std::size_t, std::chrono::microseconds>;
 	using Binner = histogram_linear_binner<test_histogram::rep>;
 
 	test_histogram::rep time;

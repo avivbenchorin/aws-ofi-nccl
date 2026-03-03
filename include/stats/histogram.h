@@ -15,6 +15,7 @@
 #include "nccl_ofi_log.h"
 #include "histogram_binner.h"
 #include "nccl_ofi_config_bottom.h"
+#include "rdtscp_clock.h"
 
 //
 // Base histogram class.  Histograms are a lightweight mechanism for tracking
@@ -106,7 +107,7 @@ public:
 	using rep = T;
 	using histogram<T, Binner>::insert;
 
-	timer_histogram(const std::string &description_arg, Binner binner_arg, DuraUnit ovh = std::chrono::nanoseconds::zero())
+	timer_histogram(const std::string &description_arg, Binner binner_arg, DuraUnit ovh = DuraUnit::zero())
 		: histogram<T, Binner>(description_arg, binner_arg, ovh.count())
 	{
 		this->overhead = ovh;
@@ -141,6 +142,61 @@ protected:
 	DuraUnit overhead = DuraUnit::zero();
 	bool active_recording = false;
 };
+
+//
+// Convenience typedef aliases for timer_histogram with different clock types
+//
+
+/*
+ * steady_timer_histogram: Timer histogram using std::chrono::steady_clock
+ * 
+ * Use this for:
+ * - General profiling of longer intervals (> 1 microsecond)
+ * - Cross-platform code that needs to work on non-x86 architectures
+ * - When portability is more important than minimal overhead
+ * - When you need guaranteed monotonic time across all platforms
+ * 
+ * Characteristics:
+ * - Overhead: ~40-80 nanoseconds per start/stop pair
+ * - Accuracy: Excellent for intervals > 1 microsecond
+ * - Portability: Works on all platforms
+ * - Stability: Not affected by CPU frequency scaling
+ */
+template <typename Binner, typename T = std::size_t, typename DuraUnit = std::chrono::nanoseconds>
+using steady_timer_histogram = timer_histogram<Binner, std::chrono::steady_clock, T, DuraUnit>;
+
+#if RDTSCP_AVAILABLE
+/*
+ * rdtscp_timer_histogram: Timer histogram using rdtscp_clock
+ * 
+ * Use this for:
+ * - Hot path profiling where timing overhead matters
+ * - Measuring very short intervals (< 1 microsecond, down to ~50-100 nanoseconds)
+ * - Performance-critical code sections where minimal overhead is essential
+ * - x86/x86_64 platforms only
+ * 
+ * Characteristics:
+ * - Overhead: ~10-25 nanoseconds per start/stop pair (< 50% of steady_clock)
+ * - Accuracy: Excellent for short intervals when invariant TSC is available
+ * - Portability: x86/x86_64 only (requires RDTSCP instruction)
+ * - Stability: Best with invariant TSC (modern CPUs); may be affected by
+ *   frequency scaling on older CPUs
+ * 
+ * Requirements:
+ * - Must call rdtscp_clock::initialize() during plugin initialization
+ * - CPU should support invariant TSC for best accuracy
+ * - Only available on x86/x86_64 platforms
+ * 
+ * Example usage:
+ *   rdtscp_timer_histogram<histogram_custom_binner<size_t>> my_timer(
+ *       "Hot path timing", binner, overhead);
+ *   my_timer.start_timer();
+ *   // ... code to measure ...
+ *   my_timer.stop_timer();
+ */
+template <typename Binner, typename T = std::size_t, typename DuraUnit = std::chrono::nanoseconds>
+using rdtscp_timer_histogram = timer_histogram<Binner, rdtscp_clock, T, DuraUnit>;
+#endif // RDTSCP_AVAILABLE
 
 // Profiling category base
 #define PROF_ISEND_BASE		0x10000
