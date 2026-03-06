@@ -717,7 +717,7 @@ static inline int update_send_data_from_remote(nccl_net_ofi_rdma_send_comm *s_co
 	nccl_net_ofi_rdma_device_t *device = ep->rdma_endpoint_get_device();
 	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 	assert(domain != NULL);
-	nccl_net_ofi_scheduler *scheduler = domain->scheduler;
+	nccl_net_ofi_scheduler *scheduler = ep->scheduler;
 
 	rdma_req_send_data_t *send_data = get_send_data(req);
 	uint16_t slot = req->msg_seq_num % NCCL_OFI_CTRL_MAILBOX_SIZE;
@@ -1832,7 +1832,7 @@ static inline int free_send_req(nccl_net_ofi_rdma_req *req,
 		assert(ep != NULL);
 		nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 		assert(domain != NULL);
-		nccl_net_ofi_release_schedule(domain->scheduler, send_data->schedule);
+		nccl_net_ofi_release_schedule(ep->scheduler, send_data->schedule);
 		send_data->schedule = NULL;
 	}
 
@@ -1904,7 +1904,7 @@ static inline int free_send_close_req(nccl_net_ofi_rdma_req *req,
 		assert(ep != NULL);
 		nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 		assert(domain != NULL);
-		nccl_net_ofi_release_schedule(domain->scheduler, send_close_data->ctrl_schedule);
+		nccl_net_ofi_release_schedule(ep->scheduler, send_close_data->ctrl_schedule);
 		send_close_data->ctrl_schedule = NULL;
 	}
 
@@ -4921,7 +4921,7 @@ static int alloc_rdma_send_req(nccl_net_ofi_rdma_send_comm *s_comm,
 	nccl_net_ofi_rdma_device_t *device = ep->rdma_endpoint_get_device();
 	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 	assert(domain != NULL);
-	nccl_net_ofi_scheduler *scheduler = domain->scheduler;
+	nccl_net_ofi_scheduler *scheduler = ep->scheduler;
 	*ret_req = NULL;
 
 	/* Allocate NCCL OFI request */
@@ -5229,7 +5229,7 @@ static int post_rdma_ctrl(nccl_net_ofi_rdma_req *req)
 	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 	assert(domain != NULL);
 
-	nccl_net_ofi_scheduler *scheduler = domain->scheduler;
+	nccl_net_ofi_scheduler *scheduler = ep->scheduler;
 	uint16_t rail_id;
 	size_t ctrl_msg_len = nccl_net_ofi_rdma_ctrl_msg_size();
 	nccl_net_ofi_schedule_t *schedule = NULL;
@@ -6402,6 +6402,11 @@ int nccl_net_ofi_rdma_ep_t::cleanup_resources() {
 		this->cm = nullptr;
 	}
 
+	if (this->scheduler) {
+		delete this->scheduler;
+		this->scheduler = nullptr;
+	}
+
 	/* Ideally we would "un-post" the rx buffers, but this
 	 * should be accomplished by closing the endpoint.
 	 */
@@ -6636,6 +6641,9 @@ nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domai
 		this->cm = new nccl_ofi_connection_manager
 				(*domain_arg, *this, sizeof(nccl_ofi_rdma_connection_info_t));
 	}
+
+	/* Create scheduler */
+	this->scheduler = new nccl_net_ofi_threshold_scheduler(this->num_rails);
 }
 
 
@@ -6652,11 +6660,6 @@ int nccl_net_ofi_rdma_domain_t::cleanup_resources()
 	if (err_code != 0) {
 		NCCL_OFI_WARN("Failed to deregister flush buffer pool");
 		ret = -EINVAL;
-	}
-
-	if (this->scheduler) {
-		delete this->scheduler;
-		this->scheduler = nullptr;
 	}
 
 	if (!this->ep_table.empty()) {
@@ -6723,9 +6726,6 @@ nccl_net_ofi_rdma_domain_t::nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_
 	if (OFI_UNLIKELY(ret != 0)) {
 		throw std::runtime_error("RDMA domain constructor: flush buffer alloc/reg failed");
 	}
-
-	/* Create scheduler */
-	this->scheduler = new nccl_net_ofi_threshold_scheduler(this->num_rails);
 }
 
 nccl_net_ofi_domain_t *nccl_net_ofi_rdma_device_t::create_domain(unsigned int domain_key)
