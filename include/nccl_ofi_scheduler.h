@@ -5,10 +5,9 @@
 #ifndef NCCL_OFI_SCHEDULER_H_
 #define NCCL_OFI_SCHEDULER_H_
 
+#include <memory_resource>
 #include <stdint.h>
 #include <pthread.h>
-
-#include "nccl_ofi_freelist.h"
 
 /*
  * @brief	Transfer information for a rail.
@@ -36,9 +35,6 @@ typedef struct nccl_net_ofi_schedule {
 	/* Number of transfer information entries set by the scheduler */
 	size_t num_xfer_infos;
 
-	/* Backpointer to freelist element (for cleanup) */
-	nccl_ofi_freelist::fl_entry *elem;
-
 	/* Array of transfer information structs. The array has at
 	 * least 'num_xfer_infos' entries. */
 	nccl_net_ofi_xfer_info_t rail_xfer_infos[];
@@ -50,6 +46,15 @@ typedef struct nccl_net_ofi_schedule {
 class nccl_net_ofi_scheduler {
 public:
 	/*
+	 * @brief	Size in bytes of a schedule struct for `num_rails' rails
+	 */
+	static size_t sizeof_schedule(int num_rails_arg)
+	{
+		return sizeof(nccl_net_ofi_schedule_t)
+			+ num_rails_arg * sizeof(nccl_net_ofi_xfer_info_t);
+	}
+
+	/*
 	 * @brief	Construct base scheduler
 	 *
 	 * @param	num_rails
@@ -57,8 +62,15 @@ public:
 	 *		This parameter must be the same as the parameter used to invoke
 	 *		the `get_schedule' method later.
 	 */
-	nccl_net_ofi_scheduler(int num_rails);
-	virtual ~nccl_net_ofi_scheduler();
+	nccl_net_ofi_scheduler(int num_rails_arg, size_t align_arg)
+		: num_rails(num_rails_arg),
+		  align(align_arg),
+		  scheduler_pool(std::pmr::pool_options{
+			  .max_blocks_per_chunk = 16,
+			  .largest_required_pool_block = sizeof_schedule(num_rails)
+		  })
+	{}
+	virtual ~nccl_net_ofi_scheduler() = default;
 
 	/*
 	 * @brief	Create schedule for a message
@@ -72,10 +84,16 @@ public:
 	 * @return	schedule, on success
 	 *		NULL, on others
 	 */
-	virtual nccl_net_ofi_schedule_t *get_schedule(size_t size, int num_rails) = 0;
+	virtual nccl_net_ofi_schedule_t *get_schedule(size_t size, int num_rails_arg) = 0;
 
-	/* Freelist of schedules */
-	nccl_ofi_freelist *schedule_fl;
+	/* Number of rails, fixed at construction */
+	const int num_rails;
+
+	/* pool_resource and striping alignment value in bytes */
+	const size_t align;
+
+	/* Pool allocator for schedule objects */
+	std::pmr::unsynchronized_pool_resource scheduler_pool;
 };
 
 /*
@@ -87,12 +105,14 @@ public:
 class nccl_net_ofi_threshold_scheduler : public nccl_net_ofi_scheduler {
 public:
 	/*
-	 * @brief	Construct threshold scheduler
+	 * @brief	Construct threshold scheduler 
+	 *
+	 * Set alignment to 128 bytes for alignment requirement for LL128 protocol
 	 *
 	 * @param	num_rails
 	 *		Number of rails
 	 */
-	nccl_net_ofi_threshold_scheduler(int num_rails);
+	nccl_net_ofi_threshold_scheduler(int num_rails_arg);
 	~nccl_net_ofi_threshold_scheduler() override = default;
 
 	/*
@@ -111,7 +131,7 @@ public:
 	 * @return	schedule, on success
 	 *		NULL, on others
 	 */
-	nccl_net_ofi_schedule_t *get_schedule(size_t size, int num_rails) override;
+	nccl_net_ofi_schedule_t *get_schedule(size_t size, int num_rails_arg) override;
 
 	/* Round robin counter */
 	unsigned int rr_small_counter;
@@ -133,7 +153,7 @@ public:
 	 *
 	 * @return	The adjusted number of stripes
 	 */
-	inline int get_num_stripes(size_t size, int num_rails);
+	inline int get_num_stripes(size_t size, int num_rails_arg);
 };
 
 /*
