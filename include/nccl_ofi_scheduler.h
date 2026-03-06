@@ -93,12 +93,15 @@ public:
 	 *		Number of rails
 	 */
 	nccl_net_ofi_threshold_scheduler(int num_rails);
-	~nccl_net_ofi_threshold_scheduler() override;
+	~nccl_net_ofi_threshold_scheduler() override = default;
 
 	/*
 	 * @brief	Create schedule for a message by multiplexing message or
 	 *		assigning the message round-robin depending on the message size
 	 *
+	 *		The caller must be holding the endpoint lock to protect the
+	 *		rr_small_counter and rr_counter variables.
+	 * 
 	 * @param	size
 	 *		Size of the message in bytes
 	 * @param	num_rails
@@ -113,8 +116,6 @@ public:
 	/* Round robin counter */
 	unsigned int rr_small_counter;
 	unsigned int rr_counter;
-	/* Lock for round robin counter */
-	pthread_mutex_t rr_lock;
 	/* threshold for small messages */
 	size_t max_small_msg_size;
 	/* Minimum size of the message in bytes before message is
