@@ -41,8 +41,9 @@ public:
 	 * in one call.  The opaque field will contain the value passed as the
 	 * regmr_opaque field to nccl_ofi_freelist_init_mr.
 	 *
-	 * Note that the freelist lock will be held during this function.  The
-	 * caller must avoid a deadlock situation with this behavior.
+	 * Note that the caller's external lock (e.g. endpoint lock) will be
+	 * held during this function. The callback must not attempt to acquire
+	 * that same lock to avoid deadlock.
 	 *
 	 * The registered memory region must cover full memory pages. For more
 	 * information, see function reg_internal_mr_ep().
@@ -61,8 +62,9 @@ public:
 	 * Similar to nccl_ofi_freelist_regmr_fn, but will be called before
 	 * releasing registered memory.
 	 *
-	 * Note that the freelist lock may be held during this function.  The
-	 * caller must avoid a deadlock situation with this behavior.
+	 * Note that the caller's external lock (e.g. endpoint lock) will be
+	 * held during this function. The callback must not attempt to acquire
+	 * that same lock to avoid deadlock.
 	 */
 	typedef int (*nccl_ofi_freelist_deregmr_fn)(void *handle);
 
@@ -149,8 +151,8 @@ public:
 	 *
 	 * Return pointer to memory of size entry_size (provided to init) from
 	 * the given freelist.  If required, the freelist will grow during the
-	 * call.  Locking to protect the freelist is not required by the
-	 * caller.
+	 * call.  The caller must hold the appropriate external lock (e.g.
+	 * endpoint lock) to protect the freelist.
 	 *
 	 * If the function returns NULL, that means that all allocated buffers
 	 * have previously been allocated and either the freelist has reached
@@ -165,8 +167,6 @@ public:
 	{
 		int ret;
 		fl_entry *entry = NULL;
-
-		std::lock_guard guard(this->lock);
 
 		if (!this->entries) {
 			ret = add(increase_entry_count);
@@ -191,16 +191,15 @@ public:
 	 *
 	 * Return a freelist item to the freelist.  After calling this
 	 * function, the user should not read from or write to memory in
-	 * entry_p, as corruption may result. Locking to protect the freelist
-	 * is not required by the caller.
+	 * entry_p, as corruption may result. The caller must hold the
+	 * appropriate external lock (e.g. endpoint lock) to protect the
+	 * freelist.
 	 */
 	void entry_free(fl_entry *entry)
 	{
 		size_t user_entry_size = this->entry_size - MEMCHECK_REDZONE_SIZE;
 
 		assert(entry);
-
-		std::lock_guard guard(this->lock);
 
 		entry->next = this->entries;
 		this->entries = entry;
@@ -301,8 +300,6 @@ protected:
 	/* Name provided by user, for debugging prints only */
 	const char *name;
 	bool enable_leak_detection;
-
-	std::mutex lock;
 };
 
 
