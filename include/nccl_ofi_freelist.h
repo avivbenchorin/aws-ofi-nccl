@@ -7,12 +7,10 @@
 
 #include <assert.h>
 #include <stdlib.h>
-#include <pthread.h>
 
 #include "nccl_ofi.h"
 #include "nccl_ofi_log.h"
 #include "nccl_ofi_memcheck.h"
-#include "nccl_ofi_pthread.h"
 
 
 /*
