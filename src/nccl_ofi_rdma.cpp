@@ -5673,6 +5673,9 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 #endif
 	ret = endpoint->process_cq_if_pending();
 #if(PROF_ISEND & PROF_PENDING_CQ)
+	if (ret != 0) {
+		g_plugin->isend_libf_pending_cq->reset_active();
+	}
 	g_plugin->isend_libf_pending_cq->stop_timer();
 #endif
 	if (ret == -EAGAIN) {
@@ -5793,6 +5796,10 @@ int nccl_net_ofi_rdma_send_comm::send(void *data, size_t size, int tag,
 	goto exit;
 
  error:
+
+#if(PROF_ISEND & PROF_TOTAL)
+	g_plugin->isend_total->reset_active();
+#endif
 	if (req)
 		req->free(false);
 	*base_req = NULL;

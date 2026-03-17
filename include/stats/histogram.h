@@ -135,6 +135,10 @@ public:
 		return duration.count();
 	}
 
+	void reset_active(void)
+	{
+		active_recording = false;
+	}
 
 protected:
 	typename clock::time_point start_time;
