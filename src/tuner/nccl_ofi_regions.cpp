@@ -2156,41 +2156,121 @@ exit:
 	return ret;
 }
 
+/*
+ * =========================================================================
+ * AllGather PAT Simple chunk-size tuning (P5en)
+ * =========================================================================
+ *
+ * Context: NCCL ships an AllGather by chopping the message into chunks and
+ * streaming them through an 8-slot FIFO per channel (NCCL_STEPS = 8); the
+ * chunk size is the slot size. PAT ("Parallel Aggregated Trees") is the
+ * algorithm: each rank simultaneously exchanges data with several peers
+ * arranged in a tree pattern.
+ *
+ * We start from a saturation cap that depends on node count: 1 MB for
+ * nNodes < 16, 512 KB for nNodes >= 16. From the cap (1M for nNodes < 16,
+ * 512K for nNodes >= 16) we walk down a halving ladder to a 32K floor, using
+ * a different threshold at each rung, comparing chunks-per-channel (nBytes /
+ * tunedChunkSize) against the rung's threshold T to decide whether to halve.
+ * Our 32K floor is one rung below NCCL's own 65536 B floor for PAT. 
+ * The thresholds and the cap split at nNodes >= 16 are closed-form equations 
+ * fit to empirical sweep data, not derived from a model.
+ * =========================================================================
+ */
 static size_t chunkSizeTuningAllGatherPatSimple(size_t nBytes, size_t nNodes)
 {
 	size_t satChunkSize = nNodes >= 16 ? 524288 : 1048576;
+
+	/* T1 (gates the saturation cap): 32 for nNodes >= 16, else
+	 * min(nNodes, 8) + 1.
+	 *
+	 * Example: at 16 nodes, T1 = 32. Stay at the 512K cap only if there
+	 * are at least 32 chunks per channel; otherwise halve. */
 	size_t T1 = nNodes >= 16 ? 32 : std::min(nNodes, (size_t)8) + 1;
+
+	/* T2 (gates the middle of the ladder): min(nNodes, 16).
+	 *
+	 * Example: at 16 nodes, T2 = 16. Stay at the current chunk size if
+	 * there are at least 16 chunks per channel; otherwise halve. */
 	size_t T2 = std::min(nNodes, (size_t)16);
+
+	/* T3 (gates the bottom of the ladder, before the 32K floor):
+	 * min(nNodes, 8).
+	 *
+	 * Example: at 16 nodes, T3 = 8. Halve down to either 32K or until
+	 * at least 8 chunks per channel exist, whichever comes first. */
 	size_t T3 = std::min(nNodes, (size_t)8);
 
 	size_t tunedChunkSize = satChunkSize;
 
-	/* Step 1: cap — halve from saturation ceiling at the transition zone */
 	while (nBytes / tunedChunkSize < T1 && tunedChunkSize > satChunkSize / 2)
 		tunedChunkSize /= 2;
 
-	/* Step 2: mid — halve through the mid-range chunk sizes (down to 64K) */
 	while (nBytes / tunedChunkSize < T2 && tunedChunkSize > 65536)
 		tunedChunkSize /= 2;
 
-	/* Step 3: low — halve through the smallest chunk sizes (down to 32K) */
 	while (nBytes / tunedChunkSize < T3 && tunedChunkSize > 32768)
 		tunedChunkSize /= 2;
 
 	return tunedChunkSize;
 }
 
+/*
+ * =========================================================================
+ * AllReduce Tree LL128 chunk-size tuning (P5en)
+ * =========================================================================
+ *
+ * Context: NCCL ships an AllReduce by chopping the message into chunks and
+ * streaming them through an 8-slot FIFO per channel (NCCL_STEPS = 8); the
+ * chunk size is the slot size. We borrow NCCL's nsteps = 1 + log2(nNodes)
+ * (named nstepsLL128 in NCCL, where it scales chunks-per-channel thresholds
+ * with tree height to keep the binary-tree pipeline fed) and reuse it as a
+ * cluster-size scaling factor in our own thresholds. The 0.1*ppn correction
+ * NCCL adds is a constant +0.8 on our 8-GPU/node platforms; we drop it.
+ *
+ * We start from a saturation cap of 288,000 bytes derived from the maximum
+ * data a P5en EFA NIC keeps in flight before throughput saturates. From there 
+ * we walk down a halving ladder using a different threshold at each rung, 
+ * comparing chunks-per-channel (nBytes / tunedChunkSize) against the rung's 
+ * threshold T to decide whether to halve. Our 18K floor is one rung below 
+ * NCCL's own 32768 B floor for Tree LL128. The thresholds are closed-form 
+ * equations fit to empirical sweep data, not derived from a model.
+ * =========================================================================
+ */
 static size_t chunkSizeTuningTreeLL128(size_t nBytes, int log2_nnodes)
 {
 	size_t nsteps = 1 + log2_nnodes;
 	size_t tunedChunkSize = 288000;
 
+	/* Step 1: should we drop *out of* the saturation cap (288K -> 144K)?
+	 *
+	 * Threshold: 2 * nsteps^2.
+	 *
+	 * Example: at 8 nodes, 2*nsteps^2 = 32. Stay at 288K only if there
+	 * are at least 32 chunks per channel, i.e. per-channel data >= ~9 MB. 
+	 * Otherwise, halve to 144K. */
 	if (nBytes / tunedChunkSize < 2 * nsteps * nsteps)
 		tunedChunkSize /= 2;
 
+	/* Step 2: middle of the ladder (144K -> 72K).
+	 *
+	 * Threshold: 1.5 * nsteps.
+	 *
+	 * Example: at 8 nodes, 1.5*nsteps = 6. Stay at 144K if there are
+	 * at least 6 chunks per channel; otherwise halve to 72K. */
 	if (nBytes / tunedChunkSize < (size_t)(1.5 * nsteps))
 		tunedChunkSize /= 2;
 
+	/* Step 3: bottom of the ladder (72K -> 36K -> 18K).
+	 *
+	 * Threshold: nsteps + 1.
+	 *
+	 * `while` rather than `if` because the same threshold applies at
+	 * multiple rungs (72K, 36K) before reaching the 18K floor.
+	 *
+	 * Example: at 8 nodes, nsteps+1 = 5. Halve down to either 18K or
+	 * until at least 5 chunks per channel exist, whichever comes
+	 * first. */
 	while (nBytes / tunedChunkSize < nsteps + 1 && tunedChunkSize > 18000)
 		tunedChunkSize /= 2;
 
