@@ -119,3 +119,18 @@ config option:
 ```
    --disable-tests        Disable build of tests.
 ```
+
+### GDAKI source-checkout prerequisite
+
+The GDAKI CUDA path uses the pinned `3rd-party/efa-dp-direct` submodule. A
+source checkout must initialize that submodule before configuring a GDAKI
+build:
+
+```
+git submodule update --init --recursive
+```
+
+Equivalently, clone with `git clone --recurse-submodules ...`. The pinned
+EFA dependency separates shared definitions, device helpers, and host APIs
+under `CUDA/common`, `CUDA/device`, and `CUDA/host`; the plugin and its GPU
+functional tests select the appropriate interfaces from that layout.
