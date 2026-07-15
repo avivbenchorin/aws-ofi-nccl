@@ -83,6 +83,9 @@ libinternal_plugin_la_LDFLAGS = -static $(CUDA_LDFLAGS) $(ROCM_LDFLAGS)
 libinternal_plugin_la_LIBADD  = $(CUDA_LIBS) $(ROCM_LIBS)
 
 if ENABLE_GDAKI
+# Queue layouts come from the pinned common interface; the host interface
+# declares the QP/CQ create and destroy APIs. Keep both private to GDAKI so
+# non-GDAKI builds do not acquire a host-API dependency.
 AM_CPPFLAGS += \
 	-I$(abs_top_srcdir)/3rd-party/efa-dp-direct/CUDA/common \
 	-I$(abs_top_srcdir)/3rd-party/efa-dp-direct/CUDA/host
