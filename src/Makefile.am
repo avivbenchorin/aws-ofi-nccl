@@ -82,6 +82,19 @@ libinternal_plugin_la_SOURCES = $(sources)
 libinternal_plugin_la_LDFLAGS = -static $(CUDA_LDFLAGS) $(ROCM_LDFLAGS)
 libinternal_plugin_la_LIBADD  = $(CUDA_LIBS) $(ROCM_LIBS)
 
+if ENABLE_GDAKI
+AM_CPPFLAGS += \
+	-I$(abs_top_srcdir)/3rd-party/efa-dp-direct/CUDA/common \
+	-I$(abs_top_srcdir)/3rd-party/efa-dp-direct/CUDA/host
+
+# Make the private host implementation available to the internal plugin for
+# later GDAKI integration. It uses CUDA Runtime APIs, so add CUDART only for
+# GDAKI builds and preserve the existing non-GDAKI dependency set.
+libinternal_plugin_la_LIBADD += \
+	$(top_builddir)/3rd-party/libefa_cuda_dp.la \
+	$(CUDA_RUNTIME_LIBS)
+endif
+
 lib_LTLIBRARIES =
 
 if ENABLE_NEURON
