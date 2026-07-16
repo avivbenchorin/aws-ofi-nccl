@@ -5,3 +5,7 @@ release tarball will also have up to date release notes.
 
 If you're looking for Plugin releases, please see the [Releases
 Page](https://github.com/aws/aws-ofi-nccl/releases).
+
+# v0.0.0ci.2 (2026-07-16)
+
+Temporary fork-only release-workflow validation with an RPM-compatible version. Do not publish.
